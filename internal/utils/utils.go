@@ -13,8 +13,10 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"io"
 	"math"
 	"math/rand/v2"
@@ -22,19 +24,16 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
-	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
-
 	"golang.org/x/image/webp"
-	_ "golang.org/x/image/webp"
 
+	"github.com/EdlinOrg/prominentcolor"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/log"
 	"github.com/damongolding/immich-kiosk/internal/kiosk"
@@ -47,9 +46,13 @@ import (
 
 const (
 
-	// SigmaConstant is used to normalise the blur effect across different image sizes.
+	// sigmaConstant is used to normalise the blur effect across different image sizes.
 	// The value 1300.0 was chosen as it provides consistent blur effects for typical screen resolutions.
-	SigmaConstant = 1300.0
+	sigmaConstant          float64 = 1300.0
+	blurredImageBrightness float64 = -20
+
+	// minMemoryWeight is the minimum weight allowed for memory assets.
+	minMemoryWeight float64 = 0.0001
 )
 
 // WeightedAsset represents an asset with a type and ID
@@ -61,8 +64,9 @@ type WeightedAsset struct {
 
 // AssetWithWeighting represents a WeightedAsset with an associated weight value
 type AssetWithWeighting struct {
-	Asset  WeightedAsset
-	Weight int
+	Asset   WeightedAsset
+	Weight  int     // base weight
+	Penalty float64 // penalty for weight. 1.0 = no penalty, 0.5 = 50% penalty.
 }
 
 // GenerateUUID generates a new random UUID string
@@ -119,7 +123,7 @@ func ImageToBytes(img image.Image) ([]byte, error) {
 // It takes a byte slice as input and returns an image.Image and any error encountered.
 // It handles both WebP and other common image formats (JPEG, PNG, GIF) automatically
 // by detecting the MIME type and using the appropriate decoder.
-func BytesToImage(imgBytes []byte) (image.Image, error) {
+func BytesToImage(imgBytes []byte, isOriginal bool) (image.Image, error) {
 
 	var img image.Image
 	var err error
@@ -134,7 +138,7 @@ func BytesToImage(imgBytes []byte) (image.Image, error) {
 			return nil, err
 		}
 	default:
-		img, err = imaging.Decode(bytes.NewReader(imgBytes))
+		img, err = imaging.Decode(bytes.NewReader(imgBytes), imaging.AutoOrientation(isOriginal))
 		if err != nil {
 			log.Error("could not decode image", "image mime type", imageMime, "err", err)
 			return nil, err
@@ -144,8 +148,8 @@ func BytesToImage(imgBytes []byte) (image.Image, error) {
 	return img, nil
 }
 
-// ApplyExifOrientation adjusts an image's orientation based on EXIF data and desired landscape/portrait mode.
-// It takes an image, a boolean indicating if landscape orientation is desired, and an EXIF orientation string.
+// ApplyExifOrientation adjusts an image's orientation based on EXIF data.
+// It takes an image and an EXIF orientation string.
 // The EXIF orientation values follow the standard specification:
 //
 //	1 = Normal
@@ -158,40 +162,33 @@ func BytesToImage(imgBytes []byte) (image.Image, error) {
 //	8 = Rotated 90° CW
 //
 // Returns the properly oriented image.
-func ApplyExifOrientation(img image.Image, isLandscape bool, exifOrientation string) image.Image {
+func ApplyExifOrientation(img image.Image, exifOrientation string) image.Image {
 
 	if img == nil {
 		return nil
 	}
 
-	bounds := img.Bounds()
-	width := bounds.Dx()
-	height := bounds.Dy()
-
-	if width == height {
+	o, err := strconv.Atoi(exifOrientation)
+	if err != nil {
 		return img
 	}
 
-	// return if image is already in the correct orientation
-	isCurrentlyLandscape := width > height
-	if isCurrentlyLandscape == isLandscape {
+	switch o {
+	case 1:
 		return img
-	}
-
-	switch exifOrientation {
-	case "2":
+	case 2:
 		return imaging.FlipH(img)
-	case "3":
+	case 3:
 		return imaging.Rotate180(img)
-	case "4":
+	case 4:
 		return imaging.FlipV(img)
-	case "5":
+	case 5:
 		return imaging.Transpose(img)
-	case "6":
+	case 6:
 		return imaging.Rotate270(img)
-	case "7":
+	case 7:
 		return imaging.Transverse(img)
-	case "8":
+	case 8:
 		return imaging.Rotate90(img)
 	default:
 		return img
@@ -262,10 +259,10 @@ func BlurImage(img image.Image, blurrAmount int, isOptimized bool, clientWidth, 
 		blurredImage = imaging.Fit(blurredImage, clientWidth, clientHeight, imaging.Lanczos)
 	}
 
-	sigma := calculateNormalizedSigma(blurrAmount, blurredImage.Bounds().Dx(), blurredImage.Bounds().Dy(), SigmaConstant)
+	sigma := calculateNormalizedSigma(blurrAmount, blurredImage.Bounds().Dx(), blurredImage.Bounds().Dy(), sigmaConstant)
 
 	blurredImage = imaging.Blur(blurredImage, sigma)
-	blurredImage = imaging.AdjustBrightness(blurredImage, -20)
+	blurredImage = imaging.AdjustBrightness(blurredImage, blurredImageBrightness)
 
 	return blurredImage, nil
 }
@@ -279,7 +276,7 @@ func CombineQueries(urlQueries url.Values, refererURL string) (url.Values, error
 	referer, err := url.Parse(refererURL)
 	if err != nil {
 		log.Error("parsing URL", "url", refererURL, "err", err)
-		return queries, fmt.Errorf("Could not read URL. Is it formatted correctly?")
+		return queries, errors.New("could not read URL. Is it formatted correctly?")
 	}
 
 	// Combine referer into values
@@ -342,25 +339,36 @@ func RandomItem[T any](s []T) T {
 	return copySlice[0]
 }
 
-// calculateTotalWeight calculates the sum of logarithmic weights for all assets in the given slice.
-// It uses natural logarithm (base e) and adds 1 to avoid log(0).
-func calculateTotalWeight(assets []AssetWithWeighting) int {
-	total := 0
+func assetWeight(a AssetWithWeighting) float64 {
+
+	weight := max(0, a.Weight)
+
+	// Base logarithmic weight
+	base := math.Log(float64(weight) + 1)
+
+	// Default penalty
+	penalty := a.Penalty
+	if penalty <= 0 {
+		penalty = 1.0
+	}
+
+	final := base * penalty
+
+	// Never allow zero or negative weight
+	final = max(final, minMemoryWeight)
+
+	return final
+}
+
+func calculateTotalWeight(assets []AssetWithWeighting) float64 {
+	total := 0.0
 	for _, asset := range assets {
-		logWeight := int(math.Log(float64(asset.Weight) + 1))
-		if logWeight == 0 {
-			logWeight = 1
-		}
-		total += logWeight
+		total += assetWeight(asset)
 	}
 	return total
 }
 
-// WeightedRandomItem selects a random asset from the given slice of WeightedAsset(s)
-// based on their logarithmic weights. It uses a weighted random selection algorithm.
 func WeightedRandomItem(assets []AssetWithWeighting) WeightedAsset {
-
-	// guards
 	switch len(assets) {
 	case 0:
 		return WeightedAsset{}
@@ -369,32 +377,27 @@ func WeightedRandomItem(assets []AssetWithWeighting) WeightedAsset {
 	}
 
 	totalWeight := calculateTotalWeight(assets)
-	randomWeight := rand.IntN(totalWeight) + 1
+	r := rand.Float64() * totalWeight
 
 	for _, asset := range assets {
-		logWeight := int(math.Log(float64(asset.Weight) + 1))
-		if randomWeight <= logWeight {
+		w := assetWeight(asset)
+		if r < w {
 			return asset.Asset
 		}
-		randomWeight -= logWeight
+		r -= w
 	}
 
-	// WeightedRandomItem sometimes returns an empty WeightedAsset
-	// when the random selection process fails to pick an item.
-	// This is a fallback to ensure we always return a valid asset.
-	if len(assets) > 0 {
-		return assets[0].Asset
-	}
-	return WeightedAsset{}
+	// Should never happen, but keep a safe fallback
+	return assets[0].Asset
 }
 
 // Color represents an RGB color with string representations
 type Color struct {
+	RGB string
+	Hex string
 	R   int
 	G   int
 	B   int
-	RGB string
-	Hex string
 }
 
 // StringToColor takes any string and returns a Color struct with deterministic RGB values.
@@ -420,10 +423,10 @@ func StringToColor(inputString string) Color {
 	return Color{R: r, G: g, B: b, RGB: rgb, Hex: hex}
 }
 
-// ColorizeRequestId takes a request ID string and returns a colorized string representation.
+// ColorizeRequestID takes a request ID string and returns a colorized string representation.
 // It generates a color based on the input string, determines the best contrasting text color,
 // and applies styling using lipgloss to create a visually distinct, colored representation of the request ID.
-func ColorizeRequestId(requestID string) string {
+func ColorizeRequestID(requestID string) string {
 
 	c := StringToColor(requestID)
 
@@ -433,6 +436,12 @@ func ColorizeRequestId(requestID string) string {
 	textColor := lipgloss.Color("#000000")
 	if textWhite > textBlack {
 		textColor = lipgloss.Color("#ffffff")
+	}
+
+	requestID = strings.ToUpper(requestID)
+
+	if len(requestID) > 4 {
+		return lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(textColor).Background(lipgloss.Color(c.Hex)).Render(requestID[len(requestID)-4:])
 	}
 
 	return lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(textColor).Background(lipgloss.Color(c.Hex)).Render(requestID)
@@ -492,7 +501,7 @@ func parseTimeString(timeStr string) (time.Time, error) {
 	// Trim whitespace and validate
 	timeStr = strings.TrimSpace(timeStr)
 	if timeStr == "" {
-		return time.Time{}, fmt.Errorf("invalid time format: empty or whitespace-only input")
+		return time.Time{}, errors.New("invalid time format: empty or whitespace-only input")
 	}
 
 	// Extract only the digits
@@ -606,7 +615,7 @@ func CreateQrCode(link string) string {
 		return ""
 	}
 
-	png, err := qrcode.Encode(link, qrcode.Medium, 128)
+	png, err := qrcode.Encode(link, qrcode.Low, 128)
 	if err != nil {
 		log.Error("QR code generation failed", "link", link, "err", err)
 		return ""
@@ -732,4 +741,228 @@ func TrimHistory(history *[]string, maxLength int) {
 	if len(*history) > maxLength {
 		*history = (*history)[len(*history)-maxLength:]
 	}
+}
+
+// IsTimeBetween checks if a given time falls between a start and end time, inclusive.
+// checkTime: The time to check
+// startTime: The beginning of the time range
+// endTime: The end of the time range
+// Returns true if checkTime is equal to or after startTime AND equal to or before endTime
+func IsTimeBetween(checkTime, startTime, endTime time.Time) bool {
+	return (checkTime.Equal(startTime) || checkTime.After(startTime)) &&
+		(checkTime.Equal(endTime) || checkTime.Before(endTime))
+}
+
+// Helper function to get days in a month
+func DaysInMonth(date time.Time) int {
+	return time.Date(date.Year(), date.Month()+1, 0, 0, 0, 0, 0, time.UTC).Day()
+}
+
+// ParseSize converts a human-readable size string (e.g., "10MB", "1GB") to bytes
+// using binary prefixes (1KB = 1024B, 1MB = 1024KB, etc.)
+func ParseSize(sizeStr string) (int64, error) {
+
+	if sizeStr == "0" {
+		return 0, nil
+	}
+
+	re := regexp.MustCompile(`^(\d+)\s*([BKMGbkmg][Bb]?)$`)
+	matches := re.FindStringSubmatch(sizeStr)
+
+	if matches == nil {
+		return 0, fmt.Errorf("invalid size format: %s", sizeStr)
+	}
+
+	bytes, err := strconv.ParseInt(matches[1], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid number: %w", err)
+	}
+
+	unit := strings.ToUpper(matches[2])
+	switch unit {
+	case "B":
+		return bytes, nil
+	case "KB", "K":
+		return bytes * 1024, nil
+	case "MB", "M":
+		return bytes * 1024 * 1024, nil
+	case "GB", "G":
+		return bytes * 1024 * 1024 * 1024, nil
+	default:
+		return 0, fmt.Errorf("unsupported unit: %s", unit)
+	}
+}
+
+// CleanDirectory removes all files and directories within the specified directory path.
+// It reads the directory contents and recursively removes each entry using os.RemoveAll.
+// Returns an error if the directory cannot be read or if any removal operation fails.
+func CleanDirectory(dirPath string) error {
+	if dirPath == "" || dirPath == "/" {
+		return fmt.Errorf("refusing to clean unsafe directory %q", dirPath)
+	}
+
+	dir, err := os.ReadDir(dirPath)
+	if err != nil {
+		return err
+	}
+
+	for _, d := range dir {
+		err = os.RemoveAll(filepath.Join(dirPath, d.Name()))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RemoveDuplicatesInPlace modifies the first slice by removing any strings that are present in the second slice.
+// It uses a map for O(1) lookups of strings in the second slice and performs the removal in-place.
+// The operation preserves the relative order of remaining elements in the first slice.
+// The first slice is modified directly and truncated to the new length containing only unique elements.
+func RemoveDuplicatesInPlace(slice1 *[]string, slice2 []string) {
+	lookup := make(map[string]struct{})
+	for _, s := range slice2 {
+		lookup[s] = struct{}{}
+	}
+
+	j := 0
+	for i := range *slice1 {
+		if _, exists := lookup[(*slice1)[i]]; !exists {
+			(*slice1)[j] = (*slice1)[i]
+			j++
+		}
+	}
+	*slice1 = (*slice1)[:j]
+}
+
+// Converts RGB (0–255) to HSL
+func rgbToHsl(r, g, b uint8) (float64, float64, float64) {
+	rf, gf, bf := float64(r)/255, float64(g)/255, float64(b)/255
+	maximum := math.Max(rf, math.Max(gf, bf))
+	minimum := math.Min(rf, math.Min(gf, bf))
+
+	var h, s, l float64
+
+	l = (maximum + minimum) / 2
+
+	if maximum == minimum {
+		h, s = 0, 0 // achromatic
+	} else {
+		d := maximum - minimum
+		if l > 0.5 {
+			s = d / (2.0 - maximum - minimum)
+		} else {
+			s = d / (maximum + minimum)
+		}
+		switch maximum {
+		case rf:
+			h = (gf - bf) / d
+			if gf < bf {
+				h += 6
+			}
+		case gf:
+			h = (bf-rf)/d + 2
+		case bf:
+			h = (rf-gf)/d + 4
+		}
+		h /= 6
+	}
+	return h, s, l
+}
+
+// Converts HSL to RGB (0–255)
+func hslToRgb(h, s, l float64) (uint8, uint8, uint8) {
+	var rF, gF, bF float64
+
+	if s == 0 {
+		return uint8(l * 255), uint8(l * 255), uint8(l * 255)
+	}
+
+	var hueToRgb = func(p, q, t float64) float64 {
+		if t < 0 {
+			t += 1
+		}
+		if t > 1 {
+			t -= 1
+		}
+		if t < 1.0/6 {
+			return p + (q-p)*6*t
+		}
+		if t < 1.0/2 {
+			return q
+		}
+		if t < 2.0/3 {
+			return p + (q-p)*(2.0/3-t)*6
+		}
+		return p
+	}
+
+	q := l * (1 + s)
+	if l >= 0.5 {
+		q = l + s - l*s
+	}
+	p := 2*l - q
+	rF = hueToRgb(p, q, h+1.0/3)
+	gF = hueToRgb(p, q, h)
+	bF = hueToRgb(p, q, h-1.0/3)
+
+	return uint8(rF * 255), uint8(gF * 255), uint8(bF * 255)
+}
+
+// Adjust lightness toward dark
+func darkenColor(c color.Color, minL float64) color.RGBA {
+	r, g, b, a := c.RGBA()
+	h, s, l := rgbToHsl(uint8(r>>8), uint8(g>>8), uint8(b>>8))
+
+	if l > minL {
+		l = minL // Clamp to darker value (e.g., 0.3)
+	}
+
+	r8, g8, b8 := hslToRgb(h, s, l)
+	return color.RGBA{r8, g8, b8, uint8(a >> 8)}
+}
+
+func ExtractDominantColor(img image.Image) (color.RGBA, error) {
+	colours, err := prominentcolor.KmeansWithArgs(prominentcolor.ArgumentNoCropping, img)
+	if err != nil {
+		return color.RGBA{}, err
+	}
+
+	if len(colours) == 0 {
+		return color.RGBA{}, errors.New("no prominent colors found")
+	}
+
+	return darkenColor(color.RGBA{
+		R: uint8(colours[0].Color.R),
+		G: uint8(colours[0].Color.G),
+		B: uint8(colours[0].Color.B),
+		A: 255,
+	}, 0.3), nil
+}
+
+func SanitizeClassName(s string) string {
+
+	allowed := regexp.MustCompile(`[^a-z0-9_/-]+`)
+
+	s = strings.ToLower(strings.TrimSpace(s))
+
+	// replace whitespace with hyphen
+	s = strings.ReplaceAll(s, " ", "-")
+
+	// remove anything NOT in the allowed set
+	s = allowed.ReplaceAllString(s, "")
+
+	// remove trailing and leading hyphens made during joining
+	s = strings.Trim(s, "-")
+
+	return s
+}
+
+func ContainsWholeWord(a, b string) bool {
+	if strings.TrimSpace(a) == "" || strings.TrimSpace(b) == "" {
+		return false
+	}
+
+	re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(a) + `\b`)
+	return re.MatchString(b)
 }

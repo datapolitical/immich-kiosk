@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"github.com/charmbracelet/log"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 
 	"github.com/damongolding/immich-kiosk/internal/config"
 	"github.com/damongolding/immich-kiosk/internal/utils"
@@ -12,11 +12,11 @@ import (
 
 // RefreshCheck endpoint to check if device requires a refresh
 func RefreshCheck(baseConfig *config.Config) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 
 		kioskVersionHeader := c.Request().Header.Get("kiosk-version")
 		kioskRefreshTimestampHeader := c.Request().Header.Get("kiosk-reload-timestamp")
-		requestID := utils.ColorizeRequestId(c.Response().Header().Get(echo.HeaderXRequestID))
+		requestID := utils.ColorizeRequestID(c.Response().Header().Get(echo.HeaderXRequestID))
 
 		// create a copy of the global config to use with this request
 		requestConfig := *baseConfig

@@ -27,38 +27,36 @@ func fadeDurationCSS(fadeDuration float32) string {
 	`, fadeDuration)
 }
 
-// Body renders the <body> content
-templ Body(viewData common.ViewData) {
-	{{ headerStr := fmt.Sprintf(`{"kiosk-version": "%s", "kiosk-device-id": "%s"}`, viewData.KioskVersion, viewData.DeviceID) }}
+templ KioskContainer(viewData common.ViewData, secret string) {
 	switch viewData.Transition {
 		case "cross-fade":
-			<body
-				hx-headers={ headerStr }
+			<div
+				id="kiosk-container"
 				hx-swap="beforeend"
-				class={ fmt.Sprintf("transition-%s", viewData.Transition), fmt.Sprintf("layout-%s", viewData.Layout), templ.KV("frameless", viewData.Frameless) }
-				hx-vals="js:{...kiosk.clientData()}"
+				class={ fmt.Sprintf("transition-%s", viewData.Transition), fmt.Sprintf("layout-%s", viewData.Layout), templ.KV("frameless", viewData.Frameless), viewData.CustomCSSClass }
+				{ webhookAttributes(viewData, "", secret)... }
 			>
 				@templ.Raw(crossFadeDurationCSS(viewData.CrossFadeTransitionDuration))
 				{ children... }
-			</body>
+			</div>
 		case "fade":
-			<body
-				hx-headers={ headerStr }
+			<div
+				id="kiosk-container"
 				hx-swap={ fmt.Sprintf("innerHTML swap:%.1fs", viewData.FadeTransitionDuration) }
-				class={ fmt.Sprintf("transition-%s", viewData.Transition), fmt.Sprintf("layout-%s", viewData.Layout), templ.KV("frameless", viewData.Frameless) }
-				hx-vals="js:{...kiosk.clientData()}"
+				class={ fmt.Sprintf("transition-%s", viewData.Transition), fmt.Sprintf("layout-%s", viewData.Layout), templ.KV("frameless", viewData.Frameless), viewData.CustomCSSClass }
+				{ webhookAttributes(viewData, "", secret)... }
 			>
 				@templ.Raw(fadeDurationCSS(viewData.FadeTransitionDuration))
 				{ children... }
-			</body>
+			</div>
 		default:
-			<body
-				hx-headers={ headerStr }
+			<div
+				id="kiosk-container"
 				hx-swap="beforeend"
-				class={ "transition-none", fmt.Sprintf("layout-%s", viewData.Layout), templ.KV("frameless", viewData.Frameless) }
-				hx-vals="js:{...kiosk.clientData()}"
+				class={ "transition-none", fmt.Sprintf("layout-%s", viewData.Layout), templ.KV("frameless", viewData.Frameless), viewData.CustomCSSClass }
+				{ webhookAttributes(viewData, "", secret)... }
 			>
 				{ children... }
-			</body>
+			</div>
 	}
 }

@@ -29,13 +29,27 @@ dist
 
 config.yaml
 *.config.yaml
+_config.yaml
+!demo.config.yaml
 
 *.pprof
 
 dist/
-
+.vscode/
 
 node_modules/
 custom.css
 
 *_templ.go
+
+demo-assets/
+
+offline-assets/
+
+frontend/public/assets/css
+frontend/public/assets/js/*.js
+!frontend/public/assets/js/sw.js
+
+/tmp/
+
+/secrets/

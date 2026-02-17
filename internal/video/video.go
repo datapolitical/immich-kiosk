@@ -2,10 +2,11 @@ package video
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/damongolding/immich-kiosk/internal/common"
 	"github.com/damongolding/immich-kiosk/internal/config"
 	"github.com/damongolding/immich-kiosk/internal/immich"
+	"github.com/damongolding/immich-kiosk/internal/kiosk"
 	"github.com/damongolding/immich-kiosk/internal/utils"
 )
 
@@ -27,33 +29,33 @@ type Video struct {
 	LastAccessed time.Time
 	FileName     string
 	FilePath     string
-	ImmichAsset  immich.ImmichAsset
+	ContentType  string
+	ImmichAsset  immich.Asset
 }
 
-// VideoManager handles downloading and managing video files
-type VideoManager struct {
-	mu sync.RWMutex
-
+// Manager handles downloading and managing video files
+type Manager struct {
 	DownloadQueue []string
 
 	Videos []Video
 	MaxAge time.Duration
+	mu     sync.RWMutex
 }
 
 // New creates a new VideoManager instance
-func New(ctx context.Context, base config.Config) (*VideoManager, error) {
-	if err := VideoInit(); err != nil {
+func New(ctx context.Context) (*Manager, error) {
+	if err := initialise(); err != nil {
 		return nil, err
 	}
 
-	v := &VideoManager{}
+	v := &Manager{}
 	go v.VideoCleanup(ctx)
 
 	return v, nil
 }
 
-// VideoInit initializes the video temp directory
-func VideoInit() error {
+// initialise initializes the video temp directory
+func initialise() error {
 
 	// Create custom temp directory if it doesn't exist
 	err := os.MkdirAll(customTempVideoDir, 0755)
@@ -62,13 +64,13 @@ func VideoInit() error {
 		return err
 	}
 
-	log.Info("created video tmp dir at", "path", customTempVideoDir)
+	log.Info("Created video tmp dir", "path", customTempVideoDir)
 
 	return nil
 }
 
 // VideoCleanup runs periodic cleanup of old video files
-func (v *VideoManager) VideoCleanup(ctx context.Context) {
+func (v *Manager) VideoCleanup(ctx context.Context) {
 	// Run cleanup every minute
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
@@ -83,8 +85,8 @@ func (v *VideoManager) VideoCleanup(ctx context.Context) {
 	}
 }
 
-// Delete removes the video temp directory and all its contents
-func Delete() {
+// DeleteTmpDir removes the video temp directory and all its contents
+func DeleteTmpDir() {
 	log.Debug("Remove custom temp video directory")
 	err := os.RemoveAll(customTempVideoDir)
 	if err != nil {
@@ -93,15 +95,15 @@ func Delete() {
 }
 
 // RemoveVideo deletes a video file and removes it from the manager
-func (v *VideoManager) RemoveVideo(id string) {
+func (v *Manager) RemoveVideo(id string) {
 
 	for i, video := range v.Videos {
 		if video.ID == id {
 			filePath := filepath.Join(customTempVideoDir, video.FileName)
 			if _, err := os.Stat(filePath); err == nil {
-				err := os.Remove(filePath)
-				if err != nil {
-					log.Error("deleting video", "video", filePath, "err", err)
+				fileRemoveErr := os.Remove(filePath)
+				if fileRemoveErr != nil {
+					log.Error("deleting video", "video", filePath, "err", fileRemoveErr)
 					continue
 				}
 
@@ -119,7 +121,7 @@ func (v *VideoManager) RemoveVideo(id string) {
 }
 
 // cleanup removes videos that have exceeded their maximum age
-func (v *VideoManager) cleanup() {
+func (v *Manager) cleanup() {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
@@ -133,7 +135,7 @@ func (v *VideoManager) cleanup() {
 }
 
 // IsDownloaded checks if a video has already been downloaded
-func (v *VideoManager) IsDownloaded(id string) bool {
+func (v *Manager) IsDownloaded(id string) bool {
 
 	if _, err := v.GetVideo(id); err == nil {
 		return true
@@ -143,7 +145,7 @@ func (v *VideoManager) IsDownloaded(id string) bool {
 }
 
 // IsDownloading checks if a video is currently being downloaded
-func (v *VideoManager) IsDownloading(id string) bool {
+func (v *Manager) IsDownloading(id string) bool {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 
@@ -151,7 +153,7 @@ func (v *VideoManager) IsDownloading(id string) bool {
 }
 
 // GetVideo retrieves a video by ID
-func (v *VideoManager) GetVideo(id string) (Video, error) {
+func (v *Manager) GetVideo(id string) (Video, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
@@ -162,19 +164,20 @@ func (v *VideoManager) GetVideo(id string) (Video, error) {
 		}
 	}
 
-	return Video{}, fmt.Errorf("video not found")
+	return Video{}, errors.New("video not found")
 }
 
 // AddVideoToViewCache adds a downloaded video to the cache
-func (v *VideoManager) AddVideoToViewCache(id, fileName, filePath string, requestConfig *config.Config, deviceID, requestUrl string, immichAsset immich.ImmichAsset, imageData, imageBlurData string) {
+func (v *Manager) AddVideoToViewCache(id, fileName, filePath, contentType string, requestConfig *config.Config, deviceID, requestURL string, immichAsset immich.Asset, imageData, imageBlurData string) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
 	v.Videos = append(v.Videos, Video{
 		ID:           id,
+		LastAccessed: time.Now(),
 		FileName:     fileName,
 		FilePath:     filePath,
-		LastAccessed: time.Now(),
+		ContentType:  contentType,
 		ImmichAsset:  immichAsset,
 	})
 
@@ -190,11 +193,13 @@ func (v *VideoManager) AddVideoToViewCache(id, fileName, filePath string, reques
 		},
 	}
 
-	cache.AssetToCacheWithPosition(viewDataToAdd, requestConfig, deviceID, requestUrl, cache.PREPEND)
+	if requestURL != "" {
+		cache.AssetToCacheWithPosition(viewDataToAdd, requestConfig, deviceID, requestURL, cache.PREPEND)
+	}
 }
 
 // removeFromQueue removes a video ID from the download queue
-func (v *VideoManager) removeFromQueue(id string) {
+func (v *Manager) removeFromQueue(id string) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
@@ -207,7 +212,7 @@ func (v *VideoManager) removeFromQueue(id string) {
 }
 
 // addToQueue adds a video ID to the download queue
-func (v *VideoManager) addToQueue(id string) {
+func (v *Manager) addToQueue(id string) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
@@ -215,7 +220,7 @@ func (v *VideoManager) addToQueue(id string) {
 }
 
 // DownloadVideo downloads a video file and adds it to the cache
-func (v *VideoManager) DownloadVideo(immichAsset immich.ImmichAsset, requestConfig config.Config, deviceID string, requestUrl string) {
+func (v *Manager) DownloadVideo(immichAsset immich.Asset, requestConfig config.Config, deviceID string, requestURL string) {
 
 	videoID := immichAsset.ID
 
@@ -223,68 +228,77 @@ func (v *VideoManager) DownloadVideo(immichAsset immich.ImmichAsset, requestConf
 	defer v.removeFromQueue(videoID)
 
 	// Get the video data
-	videoBytes, _, err := immichAsset.Video()
-	if err != nil {
-		log.Error("getting video", "err", err)
+	videoBytes, contentType, videoBytesErr := immichAsset.Video()
+	if videoBytesErr != nil {
+		log.Error("getting video", "err", videoBytesErr)
 		return
 	}
 
 	ext := filepath.Ext(immichAsset.OriginalFileName)
+	if strings.HasPrefix(contentType, "video/") {
+		immichAsset.ServedMimeType = contentType
+		mediaType := strings.Split(contentType, ";")[0]
+		parts := strings.Split(mediaType, "/")
+		if len(parts) == 2 && parts[1] != "" {
+			ext = "." + parts[1]
+		}
+	}
 
-	// Get the video filename
 	filename := videoID + ext
 	filePath := filepath.Join(customTempVideoDir, filename)
 
 	// Create a file to save the video
-	out, err := os.Create(filePath)
-	if err != nil {
-		log.Error("Error creating video file", "err", err)
+	videoFile, videoFileErr := os.Create(filePath)
+	if videoFileErr != nil {
+		log.Error("Error creating video file", "err", videoFileErr)
 		return
 	}
-	defer out.Close()
+	defer videoFile.Close()
 
 	// Write the video data to the file
-	_, err = out.Write(videoBytes)
-	if err != nil {
-		log.Error("Error writing video file", "err", err)
+	_, videoFileErr = videoFile.Write(videoBytes)
+	if videoFileErr != nil {
+		log.Error("Error writing video file", "err", videoFileErr)
 		return
 	}
 
-	imgBytes, err := immichAsset.ImagePreview()
-	if err != nil {
-		log.Error("getting image preview", "err", err)
+	var imageData, imageBlurData string
+
+	defer func() {
+		log.Debug(kiosk.DebugID+" Downloaded video", "path", filePath)
+		v.AddVideoToViewCache(videoID, filename, filePath, contentType, &requestConfig, deviceID, requestURL, immichAsset, imageData, imageBlurData)
+	}()
+
+	imgBytes, _, imgBytesErr := immichAsset.ImagePreview()
+	if imgBytesErr != nil {
+		log.Debug("Getting image preview for video", "id", videoID, "err", imgBytesErr)
+		return
 	}
 
-	img, err := utils.BytesToImage(imgBytes)
-	if err != nil {
-		log.Error("image BytesToImage", "err", err)
+	img, imgErr := utils.BytesToImage(imgBytes, false)
+	if imgErr != nil {
+		log.Error("Image BytesToImage", "err", imgErr)
 	}
-
-	img = utils.ApplyExifOrientation(img, immichAsset.IsLandscape, immichAsset.ExifInfo.Orientation)
 
 	if requestConfig.OptimizeImages {
-		img, err = utils.OptimizeImage(img, requestConfig.ClientData.Width, requestConfig.ClientData.Height)
-		if err != nil {
-			log.Error("OptimizeImages", "err", err)
+		img, imgErr = utils.OptimizeImage(img, requestConfig.ClientData.Width, requestConfig.ClientData.Height)
+		if imgErr != nil {
+			log.Error("OptimizeImages", "err", imgErr)
 		}
 	}
 
-	imgBlur, err := utils.BlurImage(img, requestConfig.BackgroundBlurAmount, false, 0, 0)
-	if err != nil {
-		log.Error("getting image preview", "err", err)
+	imgBlur, imgBlurErr := utils.BlurImage(img, requestConfig.BackgroundBlurAmount, false, 0, 0)
+	if imgBlurErr != nil {
+		log.Error("Getting image preview", "err", imgBlurErr)
 	}
 
-	imageData, err := utils.ImageToBase64(img)
-	if err != nil {
-		log.Error("converting image to base64", "err", err)
+	imageData, imageDataErr := utils.ImageToBase64(img)
+	if imageDataErr != nil {
+		log.Error("Converting image to base64", "err", imageDataErr)
 	}
 
 	imageBlurData, err := utils.ImageToBase64(imgBlur)
 	if err != nil {
-		log.Error("converting image to base64", "err", err)
+		log.Error("Converting image to base64", "err", err)
 	}
-
-	log.Debug("downloaded video", "path", filePath)
-
-	v.AddVideoToViewCache(videoID, filename, filePath, &requestConfig, deviceID, requestUrl, immichAsset, imageData, imageBlurData)
 }

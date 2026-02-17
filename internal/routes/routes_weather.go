@@ -9,11 +9,11 @@ import (
 	"github.com/damongolding/immich-kiosk/internal/config"
 	"github.com/damongolding/immich-kiosk/internal/templates/partials"
 	"github.com/damongolding/immich-kiosk/internal/weather"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 func Weather(baseConfig *config.Config) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 
 		requestData, err := InitializeRequestData(c, baseConfig)
 		if err != nil {
@@ -50,9 +50,9 @@ func Weather(baseConfig *config.Config) echo.HandlerFunc {
 			log.Debug("Using default weather location", "location", locationName)
 		}
 
-		var weatherLocation weather.WeatherLocation
+		var weatherLocation weather.Location
 
-		for attempts := 0; attempts < maxWeatherRetries; attempts++ {
+		for attempts := range maxWeatherRetries {
 			weatherLocation = weather.CurrentWeather(locationName)
 			if !strings.EqualFold(weatherLocation.Name, locationName) || len(weatherLocation.Data) == 0 {
 				log.Warn("weather data fetch attempt failed",
@@ -61,7 +61,8 @@ func Weather(baseConfig *config.Config) echo.HandlerFunc {
 				time.Sleep(time.Duration(1<<attempts) * time.Second)
 				continue
 			}
-			return Render(c, http.StatusOK, partials.WeatherLocation(weatherLocation))
+			return Render(c, http.StatusOK, partials.WeatherLocation(weatherLocation, baseConfig.SystemLang))
+
 		}
 
 		log.Error("failed to fetch weather data after all attempts",

@@ -3,7 +3,9 @@ package immich
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"slices"
@@ -17,7 +19,7 @@ import (
 	"github.com/google/go-querystring/query"
 )
 
-// RandomImageInDateRange retrieves a random image from the Immich API within the specified date range.
+// RandomAssetInDateRange retrieves a random asset from the Immich API within the specified date range.
 // Parameters:
 //   - dateRange: A string in the format "YYYY-MM-DD_to_YYYY-MM-DD" or using "today" for current date
 //   - requestID: Unique identifier for tracking the request
@@ -28,128 +30,129 @@ import (
 // - Date range parsing and validation
 // - Making API requests with retries
 // - Caching of results
-// - Filtering images based on type/status
-// - Ratio checking of images
+// - Filtering assets based on type/status
+// - Ratio checking of assets
 //
-// Returns an error if no valid images are found after max retries
-func (i *ImmichAsset) RandomImageInDateRange(dateRange, requestID, deviceID string, isPrefetch bool) error {
+// Returns an error if no valid assets are found after max retries
+func (a *Asset) RandomAssetInDateRange(dateRange, requestID, deviceID string, isPrefetch bool) error {
 
-	dateStart, dateEnd, err := determineDateRange(dateRange)
-	if err != nil {
-		return err
+	dateStart, dateEnd, dateErr := determineDateRange(dateRange)
+	if dateErr != nil {
+		return dateErr
 	}
 
 	dateStartHuman := dateStart.Format("2006-01-02 15:04:05 MST")
 	dateEndHuman := dateEnd.Format("2006-01-02 15:04:05 MST")
 
 	if isPrefetch {
-		log.Debug(requestID, "PREFETCH", deviceID, "Getting Random image from", dateStartHuman, "to", dateEndHuman)
+		log.Debug(requestID, "PREFETCH", deviceID, "Getting Random asset from", dateStartHuman, "to", dateEndHuman)
 	} else {
-		log.Debug(requestID+" Getting Random image", "from", dateStartHuman, "to", dateEndHuman)
+		log.Debug(requestID+" Getting Random asset", "from", dateStartHuman, "to", dateEndHuman)
 	}
 
 	for range MaxRetries {
 
-		var immichAssets []ImmichAsset
+		var immichAssets []Asset
 
-		u, err := url.Parse(requestConfig.ImmichUrl)
+		u, err := url.Parse(a.requestConfig.ImmichURL)
 		if err != nil {
 			return fmt.Errorf("parsing url: %w", err)
 		}
 
-		requestBody := ImmichSearchRandomBody{
+		requestBody := SearchRandomBody{
 			Type:        string(ImageType),
 			TakenAfter:  dateStart.Format(time.RFC3339),
 			TakenBefore: dateEnd.Format(time.RFC3339),
 			WithExif:    true,
 			WithPeople:  true,
-			Size:        requestConfig.Kiosk.FetchedAssetsSize,
+			Size:        a.requestConfig.Kiosk.FetchedAssetsSize,
 		}
 
-		if requestConfig.ShowArchived {
+		// Include videos if show videos is enabled
+		if a.requestConfig.ShowVideos {
+			requestBody.Type = ""
+		}
+
+		if a.requestConfig.ShowArchived {
 			requestBody.WithArchived = true
 		}
 
 		// convert body to queries so url is unique and can be cached
 		queries, _ := query.Values(requestBody)
 
-		apiUrl := url.URL{
+		apiURL := url.URL{
 			Scheme:   u.Scheme,
 			Host:     u.Host,
 			Path:     "api/search/random",
 			RawQuery: fmt.Sprintf("kiosk=%x", sha256.Sum256([]byte(queries.Encode()))),
 		}
 
-		jsonBody, err := json.Marshal(requestBody)
-		if err != nil {
-			return fmt.Errorf("marshaling request body: %w", err)
+		jsonBody, marshalErr := json.Marshal(requestBody)
+		if marshalErr != nil {
+			return fmt.Errorf("marshaling request body: %w", marshalErr)
 		}
 
-		immichApiCall := withImmichApiCache(i.immichApiCall, requestID, deviceID, immichAssets)
-		apiBody, err := immichApiCall("POST", apiUrl.String(), jsonBody)
+		immichAPICall := withImmichAPICache(a.immichAPICall, requestID, deviceID, a.requestConfig, immichAssets)
+		apiBody, _, err := immichAPICall(a.ctx, http.MethodPost, apiURL.String(), jsonBody)
 		if err != nil {
-			_, _, err = immichApiFail(immichAssets, err, apiBody, apiUrl.String())
+			_, _, err = immichAPIFail(immichAssets, err, apiBody, apiURL.String())
 			return err
 		}
 
 		err = json.Unmarshal(apiBody, &immichAssets)
 		if err != nil {
-			_, _, err = immichApiFail(immichAssets, err, apiBody, apiUrl.String())
+			_, _, err = immichAPIFail(immichAssets, err, apiBody, apiURL.String())
 			return err
 		}
 
-		apiCacheKey := cache.ApiCacheKey(apiUrl.String(), deviceID, requestConfig.SelectedUser)
+		apiCacheKey := cache.APICacheKey(apiURL.String(), deviceID, a.requestConfig.SelectedUser)
 
 		if len(immichAssets) == 0 {
-			log.Debug(requestID + " No images left in cache. Refreshing and trying again")
+			log.Debug(requestID + " No assets left in cache. Refreshing and trying again")
 			cache.Delete(apiCacheKey)
 			continue
 		}
 
+		wantedAssetType := ImageOnlyAssetTypes
+		if a.requestConfig.ShowVideos {
+			wantedAssetType = AllAssetTypes
+		}
+
 		for immichAssetIndex, asset := range immichAssets {
 
-			if !asset.isValidAsset(ImageOnlyAssetTypes, i.RatioWanted) {
-				continue
-			}
-
-			err := asset.AssetInfo(requestID, deviceID)
-			if err != nil {
-				log.Error("Failed to get additional asset data", "error", err)
-			}
-
-			if asset.containsTag(kiosk.TagSkip) {
-				continue
-			}
-
-			if requestConfig.Kiosk.Cache {
-				// Remove the current image from the slice
-				immichAssetsToCache := slices.Delete(immichAssets, immichAssetIndex, immichAssetIndex+1)
-				jsonBytes, err := json.Marshal(immichAssetsToCache)
-				if err != nil {
-					log.Error("Failed to marshal immichAssetsToCache", "error", err)
-					return err
-				}
-
-				// replace cache with used image(s) removed
-				err = cache.Replace(apiCacheKey, jsonBytes)
-				if err != nil {
-					log.Debug("Failed to update cache", "error", err, "url", apiUrl.String())
-				}
-			}
-
 			asset.Bucket = kiosk.SourceDateRange
+			asset.requestConfig = a.requestConfig
+			asset.ctx = a.ctx
+
+			if !asset.isValidAsset(requestID, deviceID, wantedAssetType, a.RatioWanted) {
+				continue
+			}
+
+			if a.requestConfig.Kiosk.Cache {
+				// Remove the current asset from the slice
+				immichAssetsToCache := slices.Delete(immichAssets, immichAssetIndex, immichAssetIndex+1)
+				jsonBytes, cacheMarshalErr := json.Marshal(immichAssetsToCache)
+				if cacheMarshalErr != nil {
+					log.Error("Failed to marshal immichAssetsToCache", "error", cacheMarshalErr)
+					return cacheMarshalErr
+				}
+
+				// replace cache with used asset(s) removed
+				cache.Set(apiCacheKey, jsonBytes, a.requestConfig.Duration)
+			}
+
 			asset.BucketID = dateRange
 
-			*i = asset
+			*a = asset
 
 			return nil
 		}
 
-		log.Debug(requestID + " No viable images left in cache. Refreshing and trying again")
+		log.Debug(requestID + " No viable assets left in cache. Refreshing and trying again")
 		cache.Delete(apiCacheKey)
 	}
 
-	return fmt.Errorf("No images found for '%s'. Max retries reached.", dateRange)
+	return fmt.Errorf("no assets found for '%s'. Max retries reached", dateRange)
 }
 
 func determineDateRange(dateRange string) (time.Time, time.Time, error) {
@@ -197,7 +200,7 @@ func processTodayDateRange() (time.Time, time.Time) {
 }
 
 // processDateRange parses a date range string in the format "YYYY-MM-DD_to_YYYY-MM-DD"
-// and returns the start and end times for filtering images.
+// and returns the start and end times for filtering assets.
 //
 // The function:
 // - Accepts a string in format "YYYY-MM-DD_to_YYYY-MM-DD"
@@ -219,7 +222,7 @@ func processDateRange(dateRange string) (time.Time, time.Time, error) {
 
 	dates := strings.SplitN(dateRange, "_to_", 2)
 	if len(dates) != 2 {
-		return dateStart, dateEnd, fmt.Errorf("Invalid date range format. Expected 'YYYY-MM-DD_to_YYYY-MM-DD', got '%s'", dateRange)
+		return dateStart, dateEnd, fmt.Errorf("invalid date range format. Expected 'YYYY-MM-DD_to_YYYY-MM-DD', got '%s'", dateRange)
 	}
 
 	if !strings.EqualFold(dates[0], "today") {
@@ -251,7 +254,7 @@ func extractDays(s string) (int, error) {
 	re := regexp.MustCompile(`\d+`)
 	match := re.FindString(s)
 	if match == "" {
-		return 0, fmt.Errorf("no number found")
+		return 0, errors.New("no number found")
 	}
 	return strconv.Atoi(match)
 }
@@ -261,9 +264,7 @@ func extractDays(s string) (int, error) {
 // Returns an error if the number of days cannot be extracted from the string.
 func processLastDays(dateRange string) (time.Time, time.Time, error) {
 
-	now := time.Now().Local()
-	dateStart := now
-	dateEnd := now
+	dateStart, dateEnd := processTodayDateRange()
 
 	days, err := extractDays(dateRange)
 	if err != nil {

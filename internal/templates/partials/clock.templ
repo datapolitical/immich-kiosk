@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/damongolding/immich-kiosk/internal/config"
 	"github.com/damongolding/immich-kiosk/internal/utils"
+	"github.com/goodsign/monday"
 	"strings"
 	"time"
 )
@@ -12,14 +13,11 @@ import (
 // If no date format is specified in config, it uses the default date layout.
 func clockDate(c config.Config) string {
 	clockDateFormat := utils.DateToLayout(c.DateFormat)
-
 	if clockDateFormat == "" {
 		clockDateFormat = config.DefaultDateLayout
 	}
 
-	t := time.Now()
-
-	return t.Format(clockDateFormat)
+	return monday.Format(time.Now(), clockDateFormat, c.SystemLang)
 }
 
 // clockTime returns the current time formatted according to the configuration settings.
@@ -47,10 +45,15 @@ templ Clock(requestConfig config.Config) {
 }
 
 // ClockContainer renders a clock html
-templ ClockContainer(theme string) {
+templ ClockContainer(source string, theme string) {
 	<div
 		id="clock"
 		class={ fmt.Sprintf("clock--theme-%s", theme) }
+		if source == "server" {
+			hx-post="/clock"
+			hx-trigger="load, every 15s"
+			hx-swap="innerHTML"
+		}
 	>
 		<div class="clock--date"></div>
 		<div class="clock--time"></div>

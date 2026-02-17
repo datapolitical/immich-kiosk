@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -8,15 +9,24 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/damongolding/immich-kiosk/internal/common"
 	"github.com/damongolding/immich-kiosk/internal/config"
+	"github.com/damongolding/immich-kiosk/internal/i18n"
 	"github.com/damongolding/immich-kiosk/internal/immich"
+	"github.com/damongolding/immich-kiosk/internal/kiosk"
 	"github.com/damongolding/immich-kiosk/internal/utils"
 	"github.com/damongolding/immich-kiosk/internal/webhooks"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"golang.org/x/sync/errgroup"
 )
 
-func Webhooks(baseConfig *config.Config) echo.HandlerFunc {
-	return func(c echo.Context) error {
+// Webhooks returns an HTTP handler for processing incoming webhook requests to the kiosk.
+//
+// The handler validates request signatures, timestamps, and payloads, and processes supported webhook events such as user interactions. For relevant events, it retrieves asset information based on the request history and triggers asynchronous webhook actions. Returns appropriate HTTP responses for demo mode, invalid requests, or processing errors.
+func Webhooks(baseConfig *config.Config, com *common.Common) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+
+		if baseConfig.Kiosk.DemoMode {
+			return c.String(http.StatusOK, "Demo mode enabled")
+		}
 
 		requestData, err := InitializeRequestData(c, baseConfig)
 		if err != nil {
@@ -31,6 +41,10 @@ func Webhooks(baseConfig *config.Config) echo.HandlerFunc {
 		requestConfig := requestData.RequestConfig
 		requestID := requestData.RequestID
 		deviceID := requestData.DeviceID
+
+		if u := strings.TrimSpace(c.FormValue("user")); u != "" {
+			requestConfig.SelectedUser = u
+		}
 
 		receivedSignature := c.Request().Header.Get("X-Signature")
 		receivedTimestamp := c.Request().Header.Get("X-Timestamp")
@@ -56,20 +70,21 @@ func Webhooks(baseConfig *config.Config) echo.HandlerFunc {
 			return c.NoContent(http.StatusBadRequest)
 		}
 
-		// 5-minute tolerance
-		if !utils.IsValidTimestamp(receivedTimestamp, 300) {
-			return c.NoContent(http.StatusBadRequest)
-		}
-
-		calculatedSignature := utils.CalculateSignature(common.SharedSecret, receivedTimestamp)
+		calculatedSignature := utils.CalculateSignature(com.Secret(), receivedTimestamp)
 
 		// Compare the received signature with the calculated signature
 		if !utils.IsValidSignature(receivedSignature, calculatedSignature) {
 			return echo.NewHTTPError(http.StatusForbidden, "Invalid signature")
 		}
 
-		switch kioskWebhookEvent {
-		case string(webhooks.UserWebhookTriggerInfoOverlay):
+		switch webhooks.WebhookEvent(kioskWebhookEvent) {
+		case
+			webhooks.UserWebhookTriggerInfoOverlay,
+			webhooks.UserLikeInfoOverlay,
+			webhooks.UserUnlikeInfoOverlay,
+			webhooks.UserHideInfoOverlay,
+			webhooks.UserUnhideInfoOverlay,
+			webhooks.UserNavigationCustom:
 
 			historyLen := len(requestConfig.History)
 
@@ -83,6 +98,7 @@ func Webhooks(baseConfig *config.Config) echo.HandlerFunc {
 
 			viewData := common.ViewData{
 				KioskVersion: KioskVersion,
+				RequestID:    requestID,
 				DeviceID:     deviceID,
 				Assets:       make([]common.ViewImageData, len(prevImages)),
 				Config:       requestConfig,
@@ -91,31 +107,47 @@ func Webhooks(baseConfig *config.Config) echo.HandlerFunc {
 			g, _ := errgroup.WithContext(c.Request().Context())
 
 			for i, imageID := range prevImages {
-				i, imageID := i, imageID
-				g.Go(func() error {
-					image := immich.NewAsset(requestConfig)
-					image.ID = imageID
 
-					err := image.AssetInfo(requestID, deviceID)
-					if err != nil {
-						log.Error(err)
-					}
+				parts := strings.Split(imageID, ":")
+				if len(parts) != 2 {
+					return fmt.Errorf("invalid history entry format: %s", imageID)
+				}
 
-					viewData.Assets[i] = common.ViewImageData{
-						ImmichAsset: image,
+				currentAssetID := strings.Replace(parts[0], kiosk.HistoryIndicator, "", 1)
+
+				g.Go(func(currentAssetID string) func() error {
+					return func() error {
+						image := immich.New(com.Context(), requestConfig)
+						image.ID = currentAssetID
+
+						assetInfoErr := image.AssetInfo(requestID, deviceID)
+						if assetInfoErr != nil {
+							log.Error(assetInfoErr)
+							return assetInfoErr
+						}
+
+						viewData.Assets[i] = common.ViewImageData{
+							ImmichAsset: image,
+						}
+						return nil
 					}
-					return nil
-				})
+				}(currentAssetID))
 			}
 
 			// Wait for all goroutines to complete and check for errors
-			if err := g.Wait(); err != nil {
-				return RenderError(c, err, "retrieving image data")
+			errGroupWait := g.Wait()
+			if errGroupWait != nil {
+				t := i18n.T()
+				return RenderError(c, errGroupWait, t("retrieving_image_data"), requestConfig.Duration)
 			}
 
-			go webhooks.Trigger(requestData, KioskVersion, webhooks.UserWebhookTriggerInfoOverlay, viewData)
+			go webhooks.Trigger(com.Context(), requestData, KioskVersion, webhooks.WebhookEvent(kioskWebhookEvent), viewData)
 
-			return c.String(http.StatusOK, "Triggered")
+			if kioskWebhookEvent == webhooks.UserWebhookTriggerInfoOverlay.String() {
+				return c.String(http.StatusOK, "Triggered")
+			}
+
+			return c.NoContent(http.StatusNoContent)
 
 		}
 

@@ -43,18 +43,37 @@ templ Wall() {
 				const container = document.getElementById('wall-container');
 				const sentinel = document.getElementById('wall-sentinel');
 				let imageCount = 0;
+				let isAppending = false;
 				const BATCH_SIZE = 24;
 
-				function appendImages(count) {
-					for (let i = 0; i < count; i++) {
+				function appendImage() {
+					return new Promise((resolve) => {
 						const img = document.createElement('img');
 						img.loading = 'lazy';
 						img.decoding = 'async';
-						img.src = `/image?wall=${Date.now()}-${imageCount}`;
 						img.alt = 'Random photo';
+
+						img.onload = () => resolve();
+						img.onerror = () => resolve();
+
+						img.src = `/image?wall=${Date.now()}-${imageCount}`;
 						container.appendChild(img);
 						imageCount += 1;
+					});
+				}
+
+				async function appendImages(count) {
+					if (isAppending) {
+						return;
 					}
+
+					isAppending = true;
+
+					for (let i = 0; i < count; i++) {
+						await appendImage();
+					}
+
+					isAppending = false;
 				}
 
 				appendImages(BATCH_SIZE);

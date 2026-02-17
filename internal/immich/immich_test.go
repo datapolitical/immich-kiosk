@@ -1,6 +1,7 @@
 package immich
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -48,11 +49,7 @@ func TestArchiveLogic(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run("", func(t *testing.T) {
-			simulatedContinueTriggered := false
-
-			if test.Type != "IMAGE" || test.IsTrashed || (test.IsArchived && !test.ArchivedWantedByUser) {
-				simulatedContinueTriggered = true
-			}
+			simulatedContinueTriggered := test.Type != "IMAGE" || test.IsTrashed || (test.IsArchived && !test.ArchivedWantedByUser)
 
 			assert.Equal(t, test.WantSimulatedContinue, simulatedContinueTriggered, "Unexpected simulatedContinueTriggered value")
 		})
@@ -64,13 +61,13 @@ func TestFacesCenterPoint(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		asset ImmichAsset
+		asset Asset
 		wantX float64
 		wantY float64
 	}{
 		{
 			name: "No people",
-			asset: ImmichAsset{
+			asset: Asset{
 				People:          []Person{},
 				UnassignedFaces: []Face{},
 			},
@@ -79,7 +76,7 @@ func TestFacesCenterPoint(t *testing.T) {
 		},
 		{
 			name: "People but no faces",
-			asset: ImmichAsset{
+			asset: Asset{
 				People: []Person{
 					{Faces: []Face{{BoundingBoxX1: 0, BoundingBoxY1: 0, BoundingBoxX2: 0, BoundingBoxY2: 0, ImageWidth: 1000, ImageHeight: 1000}}},
 					{Faces: []Face{{BoundingBoxX1: 0, BoundingBoxY1: 0, BoundingBoxX2: 0, BoundingBoxY2: 0, ImageWidth: 1000, ImageHeight: 1000}}},
@@ -91,7 +88,7 @@ func TestFacesCenterPoint(t *testing.T) {
 		},
 		{
 			name: "Zero dimensions",
-			asset: ImmichAsset{
+			asset: Asset{
 				People: []Person{
 					{Faces: []Face{{BoundingBoxX1: 10, BoundingBoxY1: 10, BoundingBoxX2: 20, BoundingBoxY2: 20, ImageWidth: 0, ImageHeight: 0}}},
 				},
@@ -102,7 +99,7 @@ func TestFacesCenterPoint(t *testing.T) {
 		},
 		{
 			name: "Single face",
-			asset: ImmichAsset{
+			asset: Asset{
 				People: []Person{
 					{Faces: []Face{{BoundingBoxX1: 100, BoundingBoxY1: 100, BoundingBoxX2: 200, BoundingBoxY2: 200, ImageWidth: 1000, ImageHeight: 1000}}},
 				},
@@ -113,7 +110,7 @@ func TestFacesCenterPoint(t *testing.T) {
 		},
 		{
 			name: "Multiple faces",
-			asset: ImmichAsset{
+			asset: Asset{
 				People: []Person{
 					{Faces: []Face{{BoundingBoxX1: 100, BoundingBoxY1: 100, BoundingBoxX2: 200, BoundingBoxY2: 200, ImageWidth: 1000, ImageHeight: 1000}}},
 					{Faces: []Face{{BoundingBoxX1: 300, BoundingBoxY1: 300, BoundingBoxX2: 400, BoundingBoxY2: 400, ImageWidth: 1000, ImageHeight: 1000}}},
@@ -125,7 +122,7 @@ func TestFacesCenterPoint(t *testing.T) {
 		},
 		{
 			name: "Multiple faces but not on the first person",
-			asset: ImmichAsset{
+			asset: Asset{
 				People: []Person{
 					{Faces: []Face{{BoundingBoxX1: 0, BoundingBoxY1: 0, BoundingBoxX2: 0, BoundingBoxY2: 0, ImageWidth: 1000, ImageHeight: 1000}}},
 					{Faces: []Face{{BoundingBoxX1: 100, BoundingBoxY1: 100, BoundingBoxX2: 200, BoundingBoxY2: 200, ImageWidth: 1000, ImageHeight: 1000}}},
@@ -138,7 +135,7 @@ func TestFacesCenterPoint(t *testing.T) {
 		},
 		{
 			name: "Multiple faces but not on the second person",
-			asset: ImmichAsset{
+			asset: Asset{
 				People: []Person{
 					{Faces: []Face{{BoundingBoxX1: 100, BoundingBoxY1: 100, BoundingBoxX2: 200, BoundingBoxY2: 200, ImageWidth: 1000, ImageHeight: 1000}}},
 					{Faces: []Face{{BoundingBoxX1: 0, BoundingBoxY1: 0, BoundingBoxX2: 0, BoundingBoxY2: 0, ImageWidth: 1000, ImageHeight: 1000}}},
@@ -164,51 +161,51 @@ func TestFacesCenterPoint(t *testing.T) {
 func TestRemoveExcludedAlbums(t *testing.T) {
 	tests := []struct {
 		name     string
-		albums   ImmichAlbums
+		albums   Albums
 		exclude  []string
-		expected ImmichAlbums
+		expected Albums
 	}{
 		{
 			name: "removes excluded albums",
-			albums: ImmichAlbums{
+			albums: Albums{
 				{ID: "1"},
 				{ID: "2"},
 				{ID: "3"},
 			},
 			exclude: []string{"2"},
-			expected: ImmichAlbums{
+			expected: Albums{
 				{ID: "1"},
 				{ID: "3"},
 			},
 		},
 		{
 			name: "handles empty exclude list",
-			albums: ImmichAlbums{
+			albums: Albums{
 				{ID: "1"},
 				{ID: "2"},
 			},
 			exclude: []string{},
-			expected: ImmichAlbums{
+			expected: Albums{
 				{ID: "1"},
 				{ID: "2"},
 			},
 		},
 		{
 			name:     "handles empty albums list",
-			albums:   ImmichAlbums{},
+			albums:   Albums{},
 			exclude:  []string{"1"},
-			expected: ImmichAlbums{},
+			expected: Albums{},
 		},
 		{
 			name: "handles multiple excludes",
-			albums: ImmichAlbums{
+			albums: Albums{
 				{ID: "1"},
 				{ID: "2"},
 				{ID: "3"},
 				{ID: "4"},
 			},
 			exclude: []string{"1", "3", "4"},
-			expected: ImmichAlbums{
+			expected: Albums{
 				{ID: "2"},
 			},
 		},
@@ -265,6 +262,345 @@ func TestExtractDays(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Errorf("extractDays() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestMergeAssetInfo tests the merging of asset information between two Asset structs.
+// It verifies:
+// - Empty slices are correctly merged with populated ones
+// - Non-empty slices are preserved and not overwritten
+// - Boolean fields are always updated regardless of value
+// - Zero/empty values are updated while non-zero values are preserved
+// - Complex nested structs are merged properly while maintaining existing data
+func TestMergeAssetInfo(t *testing.T) {
+	tests := []struct {
+		name           string
+		baseAsset      Asset
+		additionalInfo Asset
+		wantErr        bool
+		expected       Asset
+	}{
+		{
+			name: "merge empty slices",
+			baseAsset: Asset{
+				People: []Person{},
+			},
+			additionalInfo: Asset{
+				People: []Person{{ID: "1", Name: "Test"}},
+			},
+			wantErr: false,
+			expected: Asset{
+				People: []Person{{ID: "1", Name: "Test"}},
+			},
+		},
+		{
+			name: "don't overwrite non-empty slices",
+			baseAsset: Asset{
+				People: []Person{{ID: "1", Name: "Original"}},
+			},
+			additionalInfo: Asset{
+				People: []Person{{ID: "2", Name: "New"}},
+			},
+			wantErr: false,
+			expected: Asset{
+				People: []Person{{ID: "1", Name: "Original"}},
+			},
+		},
+		{
+			name: "always update booleans",
+			baseAsset: Asset{
+				IsArchived: false,
+			},
+			additionalInfo: Asset{
+				IsArchived: true,
+			},
+			wantErr: false,
+			expected: Asset{
+				IsArchived: true,
+			},
+		},
+		{
+			name: "update zero values only",
+			baseAsset: Asset{
+				ID:   "",
+				Type: "image",
+			},
+			additionalInfo: Asset{
+				ID:   "new-id",
+				Type: "video",
+			},
+			wantErr: false,
+			expected: Asset{
+				ID:   "new-id",
+				Type: "image",
+			},
+		},
+		{
+			name: "full merge test",
+			baseAsset: Asset{
+				ID:         "base-id",
+				Type:       "image",
+				IsArchived: false,
+				People:     []Person{{ID: "1", Name: "Original"}},
+			},
+			additionalInfo: Asset{
+				ID:         "new-id",
+				Type:       "video",
+				IsArchived: true,
+				People:     []Person{{ID: "2", Name: "New"}},
+				ExifInfo: ExifInfo{
+					Make:  "New",
+					Model: "New",
+				},
+			},
+			wantErr: false,
+			expected: Asset{
+				ID:         "base-id",
+				Type:       "image",
+				IsArchived: true,
+				People:     []Person{{ID: "1", Name: "Original"}},
+				ExifInfo: ExifInfo{
+					Make:  "New",
+					Model: "New",
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.baseAsset.mergeAssetInfo(tt.additionalInfo)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+			assert.Equal(t, tt.expected, tt.baseAsset)
+		})
+	}
+}
+
+func TestTagMatches(t *testing.T) {
+	tests := []struct {
+		name     string
+		pattern  string
+		value    string
+		expected bool
+	}{
+		// Exact match tests
+		{
+			name:     "exact match - same case",
+			pattern:  "parent",
+			value:    "parent",
+			expected: true,
+		},
+		{
+			name:     "exact match - different case",
+			pattern:  "Parent",
+			value:    "PARENT",
+			expected: true,
+		},
+		{
+			name:     "exact match - with leading/trailing slashes",
+			pattern:  "/parent/",
+			value:    "/parent/",
+			expected: true,
+		},
+		{
+			name:     "exact match - no match",
+			pattern:  "parent",
+			value:    "other",
+			expected: false,
+		},
+		{
+			name:     "exact match - parent vs child",
+			pattern:  "parent",
+			value:    "parent/child",
+			expected: false,
+		},
+
+		// Single-level wildcard tests (parent/*)
+		{
+			name:     "single wildcard - does not match parent itself",
+			pattern:  "parent/*",
+			value:    "parent",
+			expected: false,
+		},
+		{
+			name:     "single wildcard - matches direct child",
+			pattern:  "parent/*",
+			value:    "parent/child",
+			expected: true,
+		},
+		{
+			name:     "single wildcard - does not match grandchild",
+			pattern:  "parent/*",
+			value:    "parent/child/grandchild",
+			expected: false,
+		},
+		{
+			name:     "single wildcard - matches another direct child",
+			pattern:  "parent/*",
+			value:    "parent/another",
+			expected: true,
+		},
+		{
+			name:     "single wildcard - does not match different parent",
+			pattern:  "parent/*",
+			value:    "other/child",
+			expected: false,
+		},
+		{
+			name:     "single wildcard - case insensitive",
+			pattern:  "Parent/*",
+			value:    "PARENT/CHILD",
+			expected: true,
+		},
+
+		// Recursive wildcard tests (parent/**)
+		{
+			name:     "recursive wildcard - does not match parent itself",
+			pattern:  "parent/**",
+			value:    "parent",
+			expected: false,
+		},
+		{
+			name:     "recursive wildcard - matches direct child",
+			pattern:  "parent/**",
+			value:    "parent/child",
+			expected: true,
+		},
+		{
+			name:     "recursive wildcard - matches grandchild",
+			pattern:  "parent/**",
+			value:    "parent/child/grandchild",
+			expected: true,
+		},
+		{
+			name:     "recursive wildcard - matches deep nesting",
+			pattern:  "parent/**",
+			value:    "parent/a/b/c/d/e",
+			expected: true,
+		},
+		{
+			name:     "recursive wildcard - does not match different parent",
+			pattern:  "parent/**",
+			value:    "other/child",
+			expected: false,
+		},
+		{
+			name:     "recursive wildcard - does not match partial prefix",
+			pattern:  "parent/**",
+			value:    "parental/child",
+			expected: false,
+		},
+		{
+			name:     "recursive wildcard - case insensitive",
+			pattern:  "Parent/**",
+			value:    "PARENT/CHILD/GRANDCHILD",
+			expected: true,
+		},
+
+		// Edge cases
+		{
+			name:     "empty pattern and value",
+			pattern:  "",
+			value:    "",
+			expected: true,
+		},
+		{
+			name:     "empty pattern",
+			pattern:  "",
+			value:    "something",
+			expected: false,
+		},
+		{
+			name:     "empty value",
+			pattern:  "something",
+			value:    "",
+			expected: false,
+		},
+		{
+			name:     "nested parent - exact match",
+			pattern:  "vacation/2023",
+			value:    "vacation/2023",
+			expected: true,
+		},
+		{
+			name:     "nested parent - single wildcard",
+			pattern:  "vacation/2023/*",
+			value:    "vacation/2023/summer",
+			expected: true,
+		},
+		{
+			name:     "nested parent - recursive wildcard",
+			pattern:  "vacation/2023/**",
+			value:    "vacation/2023/summer/beach",
+			expected: true,
+		},
+		{
+			name:     "multiple slashes normalized",
+			pattern:  "//parent//",
+			value:    "parent",
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := matchesTagPattern(tt.value, tt.pattern)
+			if result != tt.expected {
+				t.Errorf("matchesTagPattern(%q, %q) = %v, expected %v",
+					tt.pattern, tt.value, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestExpandTags(t *testing.T) {
+
+	tests := []struct {
+		name     string
+		tag      string
+		expected []string
+	}{
+		// Exact match tests
+		{
+			name:     "nested parent - single wildcard",
+			tag:      "parent/child/*",
+			expected: []string{"parent/child/grand-child"},
+		},
+		{
+			name:     "nested parent - recursive wildcard",
+			tag:      "parent/**",
+			expected: []string{"parent/child", "parent/child/grand-child", "parent/child/grand-child/great-grand-child"},
+		},
+		{
+			name:     "nested child - recursive wildcard",
+			tag:      "parent/child/**",
+			expected: []string{"parent/child/grand-child", "parent/child/grand-child/great-grand-child"},
+		},
+	}
+
+	allTags := []Tag{
+		{Value: "parent"},
+		{Value: "parent/child"},
+		{Value: "parent/child/grand-child"},
+		{Value: "parent/child/grand-child/great-grand-child"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			expandedTags := []string{}
+
+			expandedTags = addRecursiveTags(tt.tag, expandedTags, allTags)
+
+			if !slices.Equal(expandedTags, tt.expected) {
+				t.Errorf("expandedTags = %v, expected %v",
+					expandedTags, tt.expected)
 			}
 		})
 	}

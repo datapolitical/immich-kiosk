@@ -32,14 +32,14 @@ templ Wall() {
 		<body>
 			<div class="container">
 				for _, v := range getData() {
-					<img
-						class="reveal-trigger"
-						hx-trigger="intersect once"
-						hx-on:intersect="loadImageOnce(this)"
-						data-src={ fmt.Sprintf("http://localhost:3000/image/%s", v["id"]) }
-						width={ fmt.Sprintf("%v", v["exifInfo"].(map[string]any)["exifImageWidth"]) }
-						height={ fmt.Sprintf("%v", v["exifInfo"].(map[string]any)["exifImageHeight"]) }
-					/>
+						<img
+							class="reveal-trigger"
+							hx-trigger="intersect once"
+							hx-on:intersect="loadImageOnce(this)"
+							data-src={ fmt.Sprintf("/image/%s", v["id"]) }
+							width={ fmt.Sprintf("%v", v["exifInfo"].(map[string]any)["exifImageWidth"]) }
+							height={ fmt.Sprintf("%v", v["exifInfo"].(map[string]any)["exifImageHeight"]) }
+						/>
 				}
 			</div>
 			<script>

@@ -3,29 +3,104 @@ package partials
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/damongolding/immich-kiosk/internal/common"
 	"github.com/damongolding/immich-kiosk/internal/config"
 	"github.com/damongolding/immich-kiosk/internal/immich"
-	"github.com/damongolding/immich-kiosk/internal/kiosk"
 	"github.com/damongolding/immich-kiosk/internal/utils"
 	"github.com/goodsign/monday"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
 
-// AssetLocation generates a formatted string containing location metadata for an asset.
-// The location is built from city, state and country information stored in EXIF data.
-// Countries can be optionally hidden via the hideCountries list.
+func bubbleBackground(c string, asset common.ViewImageData) string {
+	r := max(0, min(255, asset.ImageDominantColor.R))
+	g := max(0, min(255, asset.ImageDominantColor.G))
+	b := max(0, min(255, asset.ImageDominantColor.B))
+
+	return fmt.Sprintf(`
+	<style>
+		.%s .asset--metadata--has-icon {
+			background-color: rgba(%d, %d, %d, 0.6);
+		}
+	</style>
+	`, c, r, g, b)
+}
+
+// AssetMetadata renders metadata for an asset as an HTML component.
+// Displays configurable metadata including people, albums, date/time,
+// description, EXIF data, location and asset ID.
 //
 // Parameters:
-//   - info: ExifInfo struct containing the location metadata
-//   - hideCountries: List of country names that should not be displayed
+//   - viewData: ViewData struct with display settings and asset data
+//   - assetIndex: Index of asset to display metadata for
 //
 // Returns:
-//   - string: HTML-formatted location string, or empty string if no location data
+//   - templ.Component: HTML component with formatted metadata
+templ AssetMetadata(viewData common.ViewData, assetIndex int) {
+	// {{ showSourceName := shouldShowSourceName(viewData, assetIndex) }}
+	{{ showDateTime := viewData.ShowImageDate || viewData.ShowImageTime }}
+	{{ showDescription := viewData.ShowImageDescription && viewData.Assets[assetIndex].ImmichAsset.ExifInfo.Description != "" }}
+	{{ rightAlignIcons := len(viewData.Assets) > 1 && assetIndex == 1 }}
+	{{ names := peopleNames(viewData.Assets[assetIndex].ImmichAsset.People, viewData.ShowPersonName, viewData.ShowPersonAge, viewData.ShowAgeYearUnit, viewData.AgeSwitchToYearsAfter, viewData.Assets[assetIndex].ImmichAsset.LocalDateTime) }}
+	{{ showUser := viewData.ShowUser }}
+	{{ className := "frame-" + utils.GenerateUUID() }}
+	if viewData.Theme == "bubble" {
+		@templ.Raw(bubbleBackground(className, viewData.Assets[assetIndex]))
+	}
+	<div class={ "asset--metadata", fmt.Sprintf("asset--metadata--theme-%s", viewData.Theme), templ.KV("right-align-icons", rightAlignIcons), className }>
+		if showUser && viewData.Assets[assetIndex].User != "" {
+			@userIcon(cases.Title(language.English).String(viewData.Assets[assetIndex].User))
+		}
+		if viewData.ShowOwner {
+			@uploadIcon(viewData.Assets[assetIndex].ImmichAsset.Owner.Name)
+		}
+		if viewData.Assets[assetIndex].ImmichAsset.MemoryTitle != "" {
+			@memoryIcon(viewData.Assets[assetIndex].ImmichAsset.MemoryTitle)
+		}
+		if (viewData.ShowPersonName || viewData.ShowPersonAge) && names != "" {
+			@templ.Raw(AssetPeople(names))
+		}
+		if viewData.ShowAlbumName && len(viewData.Assets[assetIndex].ImmichAsset.AppearsIn) != 0 {
+			@albumIcon(joinAlbumNames(viewData.Assets[assetIndex].ImmichAsset.AppearsIn))
+		}
+		if showDateTime {
+			@calendarIcon(AssetDateTime(viewData, assetIndex, false))
+		}
+		if showDescription && len(viewData.Assets[assetIndex].ImmichAsset.ExifInfo.Description) > 0 {
+			@descriptionIcon(viewData.Assets[assetIndex].ImmichAsset.ExifInfo.Description)
+		}
+		if viewData.ShowImageCamera {
+			@cameraIcon(AssetCameraData(viewData.Assets[assetIndex].ImmichAsset.ExifInfo))
+		}
+		if viewData.ShowImageExif {
+			@exifIcon(AssetExif(viewData.Assets[assetIndex].ImmichAsset.ExifInfo))
+		}
+		if viewData.ShowImageLocation {
+			@locationIcon(AssetLocation(viewData.Assets[assetIndex].ImmichAsset.ExifInfo, viewData.HideCountries))
+		}
+		if viewData.ShowImageID {
+			@idIcon(viewData.Assets[assetIndex].ImmichAsset.ID)
+		}
+	</div>
+}
+
+// AssetLocation generates a formatted string containing location metadata for an asset.
+// Builds a hierarchical location string from EXIF city, state and country data.
+// Country names can be filtered out based on the hideCountries list.
+// Location parts are joined with commas, with country on a new line if other fields exist.
+// Empty fields are skipped. Returns empty string if no location data available.
+//
+// Parameters:
+//   - info: ExifInfo containing the asset's location metadata including city, state, country
+//   - hideCountries: List of country names (lowercase) that should be excluded from display
+//
+// Returns:
+//   - string: Comma-separated location with optional line break before country,
+//     or empty string if no location data present
 func AssetLocation(info immich.ExifInfo, hideCountries []string) string {
 	var parts []string
 
@@ -49,20 +124,7 @@ func AssetLocation(info immich.ExifInfo, hideCountries []string) string {
 		return ""
 	}
 
-	return fmt.Sprintf(`
-		<div class="asset--metadata--has-icon asset--metadata--location">
-			<div class="asset--metadata--icon">
-				<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512">
-					<!--!Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2025 Fonticons, Inc.-->
-					<path d="M215.7 499.2C267 435 384 279.4 384 192C384 86 298 0 192 0S0 86 0 192c0 87.4 117 243 168.3 307.2c12.3 15.3 35.1 15.3 47.4 0zM192 128a64 64 0 1 1 0 128 64 64 0 1 1 0-128z"/>
-				</svg>
-			</div>
-			<div>
-				%s
-			</div>
-		</div>
-		`, strings.Join(parts, ", "),
-	)
+	return strings.Join(parts, ", ")
 }
 
 // AssetExif generates a formatted string containing camera EXIF metadata.
@@ -81,44 +143,43 @@ func AssetExif(info immich.ExifInfo) string {
 		return ""
 	}
 
-	stats.WriteString(`
-	<div class="asset--metadata--has-icon">
-		<div class="asset--metadata--icon">
-			<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-				<!--!Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2025 Fonticons, Inc.-->
-				<path d="M149.1 64.8L138.7 96 64 96C28.7 96 0 124.7 0 160L0 416c0 35.3 28.7 64 64 64l384 0c35.3 0 64-28.7 64-64l0-256c0-35.3-28.7-64-64-64l-74.7 0L362.9 64.8C356.4 45.2 338.1 32 317.4 32L194.6 32c-20.7 0-39 13.2-45.5 32.8zM256 192a96 96 0 1 1 0 192 96 96 0 1 1 0-192z"></path>
-			</svg>
-		</div>
-	<div>`)
-
 	if info.FNumber != 0 {
-		stats.WriteString(fmt.Sprintf("<span class=\"asset--metadata--exif--fnumber\">&#402;</span>/%.1f", info.FNumber))
+		fmt.Fprintf(&stats, "<span class=\"asset--metadata--exif--fnumber\">&#402;</span>/%.1f", info.FNumber)
 	}
 
 	if info.ExposureTime != "" {
 		if stats.Len() > 0 {
 			stats.WriteString("<span class=\"asset--metadata--exif--seperator\">&#124;</span>")
 		}
-		stats.WriteString(fmt.Sprintf("%s<small>s</small>", info.ExposureTime))
+		fmt.Fprintf(&stats, "%s<small>s</small>", info.ExposureTime)
 	}
 
 	if info.FocalLength != 0 {
 		if stats.Len() > 0 {
 			stats.WriteString("<span class=\"asset--metadata--exif--seperator\">&#124;</span>")
 		}
-		stats.WriteString(fmt.Sprintf("%vmm", info.FocalLength))
+		fmt.Fprintf(&stats, "%vmm", info.FocalLength)
 	}
 
 	if info.Iso != 0 {
 		if stats.Len() > 0 {
 			stats.WriteString("<span class=\"asset--metadata--exif--seperator\">&#124;</span>")
 		}
-		stats.WriteString(fmt.Sprintf("ISO %v", info.Iso))
+		fmt.Fprintf(&stats, "ISO %v", info.Iso)
 	}
 
-	stats.WriteString(`</div></div>`)
-
 	return stats.String()
+}
+
+func AssetCameraData(exifInfo immich.ExifInfo) string {
+	ma := strings.TrimSpace(exifInfo.Make)
+	mo := strings.TrimSpace(exifInfo.Model)
+
+	if utils.ContainsWholeWord(ma, mo) {
+		return mo
+	}
+
+	return strings.TrimSpace(fmt.Sprintf("%s %s", ma, mo))
 }
 
 // AssetDateTime generates a formatted date/time string for an asset.
@@ -128,6 +189,7 @@ func AssetExif(info immich.ExifInfo) string {
 // Parameters:
 //   - viewData: ViewData struct containing display settings and assets
 //   - assetIndex: Index of the asset in the ViewData assets slice
+//   - moreInfo: Boolean indicating if additional date/time info should be shown
 //
 // Returns:
 //   - string: Formatted date/time string based on settings
@@ -152,43 +214,195 @@ func AssetDateTime(viewData common.ViewData, assetIndex int, moreInfo bool) stri
 		assetDateFormat = config.DefaultDateLayout
 	}
 
-	localDateTime := viewData.Assets[assetIndex].ImmichAsset.LocalDateTime
+	parsedDateTime := viewData.Assets[assetIndex].ImmichAsset.LocalDateTime
+	timeZone := viewData.Assets[assetIndex].ImmichAsset.ExifInfo.TimeZone
+	if timeZone != "" {
+		loc, err := time.LoadLocation(timeZone)
+		if err == nil {
+			parsedDateTime = viewData.Assets[assetIndex].ImmichAsset.ExifInfo.DateTimeOriginal.In(loc)
+		}
+	}
 	switch {
 	case moreInfo || (viewData.ShowImageDate && viewData.ShowImageTime):
 		assetDate = fmt.Sprintf(
 			"%s %s",
-			monday.Format(localDateTime, assetDateFormat, viewData.SystemLang),
-			localDateTime.Format(assetTimeFormat),
+			monday.Format(parsedDateTime, assetDateFormat, viewData.SystemLang),
+			parsedDateTime.Format(assetTimeFormat),
 		)
 	case viewData.ShowImageDate:
-		assetDate = monday.Format(localDateTime, assetDateFormat, viewData.SystemLang)
+		assetDate = monday.Format(parsedDateTime, assetDateFormat, viewData.SystemLang)
 	case viewData.ShowImageTime:
-		assetDate = localDateTime.Format(assetTimeFormat)
+		assetDate = parsedDateTime.Format(assetTimeFormat)
 	}
 
 	return strings.ToLower(assetDate)
 }
 
-// peopleNames extracts and joins the names of people tagged in an asset.
-// Filters out empty names and joins the remaining with commas.
+// calculateAge calculates a person's age based on their birth date.
+// For individuals less than a month old, returns age in days.
+// For individuals less than 1 year old, returns age in months.
+// For individuals 1 year or older, returns age in years.
 //
 // Parameters:
-//   - people: Slice of Person structs containing name data
+//   - assetDate: time.Time representing the reference date to calculate age against
+//   - birthDate: time.Time representing the person's date of birth
 //
 // Returns:
-//   - string: Comma-separated list of person names
-func peopleNames(people []immich.Person) string {
-
-	var p []string
-
-	for _, person := range people {
-		if person.Name != "" {
-			p = append(p, person.Name)
-		}
+//   - string: Age formatted as "X days", "X months" or "X years"
+//     with appropriate pluralization. Returns empty string if assetDate is before birthDate.
+func calculateAge(assetDate, birthDate time.Time, addYearUnit bool, switchToYears int) string {
+	if assetDate.Before(birthDate) {
+		return ""
 	}
-	return strings.Join(p, ", ")
+
+	years := assetDate.Year() - birthDate.Year()
+	months := int(assetDate.Month() - birthDate.Month())
+	days := assetDate.Day() - birthDate.Day()
+
+	// Adjust for negative months or days
+	if days < 0 {
+		// Subtract a month and add days of the previous month
+		months--
+		previousMonth := assetDate.AddDate(0, -1, 0)
+		days += utils.DaysInMonth(previousMonth)
+	}
+	if months < 0 {
+		years--
+		months += 12
+	}
+
+	// Calculate total days for comparison
+	totalDays := int(assetDate.Sub(birthDate).Hours() / 24)
+
+	// Choose appropriate format based on the age
+	switch {
+	case years > 0 && years < switchToYears:
+		if months == 0 {
+			if addYearUnit {
+				return fmt.Sprintf("%dy", years)
+			}
+			return strconv.Itoa(years)
+		}
+		return fmt.Sprintf("%dy %dm", years, months)
+	case years > 0:
+		if addYearUnit {
+			return fmt.Sprintf("%dy", years)
+		}
+		return strconv.Itoa(years)
+	case months > 0:
+		return fmt.Sprintf("%dm", months)
+	default:
+		return pluralize(totalDays, "day")
+	}
 }
 
+func pluralize(count int, unit string) string {
+	if count == 1 {
+		return fmt.Sprintf("%d %s", count, unit)
+	}
+	return fmt.Sprintf("%d %ss", count, unit)
+}
+
+// peopleNames returns a comma-separated string of person names with optional ages.
+//
+// Parameters:
+//   - people: Slice of Person structs containing name and birth date information
+//   - showName: Boolean indicating if names should be displayed
+//   - showAge: Boolean indicating if ages should be displayed
+//   - assetDate: Reference date for calculating ages
+//
+// Returns:
+//   - string: Comma-separated list of formatted person names with optional ages
+func peopleNames(people []immich.Person, showName, showAge, addYearUnit bool, switchToYears int, assetDate time.Time) string {
+	var names []string
+
+	for _, person := range people {
+		if person.Name == "" {
+			continue
+		}
+
+		name := formatPersonName(person, showName, showAge, addYearUnit, switchToYears, assetDate)
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+
+	slices.Sort(names)
+
+	return strings.Join(names, ", ")
+}
+
+// formatPersonName formats a single person's name with optional age.
+//
+// Parameters:
+//   - person: Person struct containing name and birth date
+//   - showName: Boolean indicating if name should be displayed
+//   - showAge: Boolean indicating if age should be displayed
+//   - assetDate: Reference date for calculating age
+//
+// Returns:
+//   - string: Formatted name with optional age in parentheses
+func formatPersonName(person immich.Person, showName, showAge, addYearUnit bool, switchToYears int, assetDate time.Time) string {
+	if !showName && !showAge {
+		return ""
+	}
+
+	if !showName && showAge && person.BirthDate == "" {
+		return ""
+	}
+
+	name := person.Name
+
+	if showAge && person.BirthDate != "" {
+		if age := getPersonAge(person, addYearUnit, switchToYears, assetDate); age != "" {
+			name = fmt.Sprintf("%s <span class=\"metadata-age-bracket\">(</span>%s<span class=\"metadata-age-bracket\">)</span>", name, age)
+		}
+	}
+
+	return name
+}
+
+// getPersonAge calculates the age of a person at a given reference date.
+//
+// Parameters:
+//   - person: Person struct containing birth date information
+//   - assetDate: Reference date for calculating age
+//
+// Returns:
+//   - string: Formatted age string or empty string if birth date is invalid
+func getPersonAge(person immich.Person, addYearUnit bool, switchToYears int, assetDate time.Time) string {
+	birthDate, err := person.BirthDate.Time()
+	if err != nil {
+		return ""
+	}
+
+	return calculateAge(assetDate, birthDate, addYearUnit, switchToYears)
+}
+
+// joinAlbumNames joins album names into a comma-separated string.
+//
+// Parameters:
+//   - albums: Slice of Album structs containing album information
+//
+// Returns:
+//   - string: Comma-separated list of album names
+func joinAlbumNames(albums immich.Albums) string {
+	albumNames := make([]string, len(albums))
+
+	for i, album := range albums {
+		albumNames[i] = album.AlbumName
+	}
+
+	return strings.Join(albumNames, ", ")
+}
+
+// AssetPeople returns HTML markup for displaying people metadata with an icon.
+//
+// Parameters:
+//   - peopleNames: Comma-separated string of person names
+//
+// Returns:
+//   - string: HTML markup with people icon and names
 func AssetPeople(peopleNames string) string {
 	return fmt.Sprintf(`
 		<div class="asset--metadata--has-icon">
@@ -202,129 +416,4 @@ func AssetPeople(peopleNames string) string {
 				%s
 			</div>
 		</div>`, peopleNames)
-}
-
-func AssetTags(tags string) string {
-	return fmt.Sprintf(`
-		<div class="asset--metadata--has-icon">
-			<div class="asset--metadata--icon">
-				<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512">
-					<!--!Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2025 Fonticons, Inc.-->
-					<path d="M0 80L0 229.5c0 17 6.7 33.3 18.7 45.3l176 176c25 25 65.5 25 90.5 0L418.7 317.3c25-25 25-65.5 0-90.5l-176-176c-12-12-28.3-18.7-45.3-18.7L48 32C21.5 32 0 53.5 0 80zm112 32a32 32 0 1 1 0 64 32 32 0 1 1 0-64z"/>
-				</svg>
-			</div>
-			<div class="more-info--tag-wrapper">
-				%s
-			</div>
-		</div>`, tags)
-}
-
-// AssetMetadata renders metadata for an asset as an HTML component.
-// Displays configurable metadata including people, albums, date/time,
-// description, EXIF data, location and asset ID.
-//
-// Parameters:
-//   - viewData: ViewData struct with display settings and asset data
-//   - assetIndex: Index of asset to display metadata for
-//
-// Returns:
-//   - templ.Component: HTML component with formatted metadata
-templ AssetMetadata(viewData common.ViewData, assetIndex int) {
-	// {{ showSourceName := shouldShowSourceName(viewData, assetIndex) }}
-	{{ showDateTime := viewData.ShowImageDate || viewData.ShowImageTime }}
-	{{ showDescription := viewData.ShowImageDescription && viewData.Assets[assetIndex].ImmichAsset.ExifInfo.Description != "" }}
-	{{ rightAlignIcons := len(viewData.Assets) == 1 || len(viewData.Assets) > 1 && assetIndex == 1 || viewData.Layout == kiosk.LayoutSplitviewLandscape }}
-	{{ names := peopleNames(viewData.Assets[assetIndex].ImmichAsset.People) }}
-	{{ showUser := viewData.ShowUser }}
-	<div class={ "asset--metadata", fmt.Sprintf("asset--metadata--theme-%s", viewData.Theme), templ.KV("right-align-icons", rightAlignIcons) }>
-		if showUser && viewData.Assets[assetIndex].User != "" {
-			<div class="asset--metadata--has-icon">
-				<div class="asset--metadata--icon">
-					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-						<!--!Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2025 Fonticons, Inc.-->
-						<path d="M336 352c97.2 0 176-78.8 176-176S433.2 0 336 0S160 78.8 160 176c0 18.7 2.9 36.8 8.3 53.7L7 391c-4.5 4.5-7 10.6-7 17l0 80c0 13.3 10.7 24 24 24l80 0c13.3 0 24-10.7 24-24l0-40 40 0c13.3 0 24-10.7 24-24l0-40 40 0c6.4 0 12.5-2.5 17-7l33.3-33.3c16.9 5.4 35 8.3 53.7 8.3zM376 96a40 40 0 1 1 0 80 40 40 0 1 1 0-80z"></path>
-					</svg>
-				</div>
-				<div>
-					<span>{ cases.Title(language.English).String(viewData.Assets[assetIndex].User) }</span>
-				</div>
-			</div>
-		}
-		if viewData.Assets[assetIndex].ImmichAsset.MemoryTitle != "" {
-			<div class="asset--metadata--has-icon">
-				<div class="asset--metadata--icon">
-					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-						<!--!Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2025 Fonticons, Inc.-->
-						<path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9L0 168c0 13.3 10.7 24 24 24l110.1 0c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24l0 104c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65 0-94.1c0-13.3-10.7-24-24-24z"></path>
-					</svg>
-				</div>
-				<div>
-					<span>{ viewData.Assets[assetIndex].ImmichAsset.MemoryTitle }</span>
-				</div>
-			</div>
-		}
-		if viewData.ShowPersonName && names != "" {
-			@templ.Raw(AssetPeople(names))
-		}
-		if viewData.ShowAlbumName && len(viewData.Assets[assetIndex].ImmichAsset.AppearsIn) != 0 {
-			<div class="asset--metadata--has-icon">
-				<div class="asset--metadata--icon">
-					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512">
-						<!--!Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2025 Fonticons, Inc.-->
-						<path d="M160 32c-35.3 0-64 28.7-64 64l0 224c0 35.3 28.7 64 64 64l352 0c35.3 0 64-28.7 64-64l0-224c0-35.3-28.7-64-64-64L160 32zM396 138.7l96 144c4.9 7.4 5.4 16.8 1.2 24.6S480.9 320 472 320l-144 0-48 0-80 0c-9.2 0-17.6-5.3-21.6-13.6s-2.9-18.2 2.9-25.4l64-80c4.6-5.7 11.4-9 18.7-9s14.2 3.3 18.7 9l17.3 21.6 56-84C360.5 132 368 128 376 128s15.5 4 20 10.7zM192 128a32 32 0 1 1 64 0 32 32 0 1 1 -64 0zM48 120c0-13.3-10.7-24-24-24S0 106.7 0 120L0 344c0 75.1 60.9 136 136 136l320 0c13.3 0 24-10.7 24-24s-10.7-24-24-24l-320 0c-48.6 0-88-39.4-88-88l0-224z"></path>
-					</svg>
-				</div>
-				<div>
-					<span>{ strings.Join(viewData.Assets[assetIndex].ImmichAsset.AppearsIn, ", ") }</span>
-				</div>
-			</div>
-		}
-		if showDateTime {
-			<div class="asset--metadata--has-icon">
-				<div class="asset--metadata--icon">
-					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512">
-						<!--!Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2025 Fonticons, Inc.-->
-						<path d="M96 32l0 32L48 64C21.5 64 0 85.5 0 112l0 48 448 0 0-48c0-26.5-21.5-48-48-48l-48 0 0-32c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 32L160 64l0-32c0-17.7-14.3-32-32-32S96 14.3 96 32zM448 192L0 192 0 464c0 26.5 21.5 48 48 48l352 0c26.5 0 48-21.5 48-48l0-272z"></path>
-					</svg>
-				</div>
-				<div class="asset--metadata--datetime">
-					{ AssetDateTime(viewData, assetIndex, false) }
-				</div>
-			</div>
-		}
-		if showDescription && len(viewData.Assets[assetIndex].ImmichAsset.ExifInfo.Description) > 0 {
-			<div class="asset--metadata--has-icon asset--metadata--description">
-				<div class="asset--metadata--icon">
-					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512">
-						<!--! Font Awesome Pro 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license (Commercial License) Copyright 2024 Fonticons, Inc. -->
-						<path d="M64 96l0 32c0 17.7-14.3 32-32 32s-32-14.3-32-32L0 80C0 53.5 21.5 32 48 32l176 0 176 0c26.5 0 48 21.5 48 48l0 48c0 17.7-14.3 32-32 32s-32-14.3-32-32l0-32L256 96l0 320 48 0c17.7 0 32 14.3 32 32s-14.3 32-32 32l-160 0c-17.7 0-32-14.3-32-32s14.3-32 32-32l48 0 0-320L64 96z"></path>
-					</svg>
-				</div>
-				<div>
-					<small>
-						{ viewData.Assets[assetIndex].ImmichAsset.ExifInfo.Description }
-					</small>
-				</div>
-			</div>
-		}
-		if viewData.ShowImageExif {
-			@templ.Raw(AssetExif(viewData.Assets[assetIndex].ImmichAsset.ExifInfo))
-		}
-		if viewData.ShowImageLocation {
-			@templ.Raw(AssetLocation(viewData.Assets[assetIndex].ImmichAsset.ExifInfo, viewData.HideCountries))
-		}
-		if viewData.ShowImageID {
-			<div class="asset--metadata--has-icon asset--metadata--id">
-				<div class="asset--metadata--icon">
-					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512">
-						<!--!Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2025 Fonticons, Inc.-->
-						<path d="M181.3 32.4c17.4 2.9 29.2 19.4 26.3 36.8L197.8 128l95.1 0 11.5-69.3c2.9-17.4 19.4-29.2 36.8-26.3s29.2 19.4 26.3 36.8L357.8 128l58.2 0c17.7 0 32 14.3 32 32s-14.3 32-32 32l-68.9 0L325.8 320l58.2 0c17.7 0 32 14.3 32 32s-14.3 32-32 32l-68.9 0-11.5 69.3c-2.9 17.4-19.4 29.2-36.8 26.3s-29.2-19.4-26.3-36.8l9.8-58.7-95.1 0-11.5 69.3c-2.9 17.4-19.4 29.2-36.8 26.3s-29.2-19.4-26.3-36.8L90.2 384 32 384c-17.7 0-32-14.3-32-32s14.3-32 32-32l68.9 0 21.3-128L64 192c-17.7 0-32-14.3-32-32s14.3-32 32-32l68.9 0 11.5-69.3c2.9-17.4 19.4-29.2 36.8-26.3zM187.1 192L165.8 320l95.1 0 21.3-128-95.1 0z"></path>
-					</svg>
-				</div>
-				<div>
-					{ viewData.Assets[assetIndex].ImmichAsset.ID }
-				</div>
-			</div>
-		}
-	</div>
 }

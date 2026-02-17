@@ -2,7 +2,6 @@ package components
 
 import (
 	"github.com/damongolding/immich-kiosk/internal/common"
-	"github.com/damongolding/immich-kiosk/internal/immich"
 	"github.com/damongolding/immich-kiosk/internal/templates/partials"
 )
 
@@ -12,14 +11,15 @@ import (
 //
 // Parameters:
 //   - viewData: ViewData containing all necessary information for rendering the images.
-templ Image(viewData common.ViewData) {
+//   - secret: The secret key used for generating the signature.
+templ Image(viewData common.ViewData, secret string) {
 	if len(viewData.Assets) < 2 {
 		@layoutSingleView(viewData)
 	} else {
 		@layoutSplitView(viewData)
 	}
-	@partials.RenderHistory(viewData, immich.ImageType)
+	@partials.RenderHistory(viewData)
 	if viewData.ShowMoreInfo {
-		@partials.RenderMoreInfo(viewData)
+		@partials.RenderMoreInfo(viewData, secret)
 	}
 }

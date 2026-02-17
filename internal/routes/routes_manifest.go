@@ -1,12 +1,12 @@
 package routes
 
 import (
-	"fmt"
+	"errors"
 	"net/http"
 	"net/url"
 
 	"github.com/charmbracelet/log"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // ManifestJSON represents the JSON structure for a web app manifest
@@ -32,7 +32,7 @@ type ManifestIcons struct {
 // Manifest generates and returns a web app manifest JSON response
 // based on the request referer URL. It sets appropriate headers
 // and formats the manifest data according to the Web App Manifest spec.
-func Manifest(c echo.Context) error {
+func Manifest(c *echo.Context) error {
 	refererURL := c.Request().Referer()
 	if refererURL == "" {
 		refererURL = "/"
@@ -41,7 +41,7 @@ func Manifest(c echo.Context) error {
 	referer, err := url.Parse(refererURL)
 	if err != nil {
 		log.Error("parsing URL", "url", refererURL, "err", err)
-		return fmt.Errorf("Could not read URL. Is it formatted correctly?")
+		return errors.New("could not read URL. Is it formatted correctly?")
 	}
 
 	manifest := &ManifestJSON{
@@ -52,7 +52,7 @@ func Manifest(c echo.Context) error {
 		Scope:           "/",
 		Display:         "fullscreen",
 		BackgroundColor: "#000000",
-		ThemeColor:      "#000000",
+		ThemeColor:      "#1f262f",
 		Icons: []ManifestIcons{
 			{
 				Src:   "/assets/images/android-chrome-192x192.png",

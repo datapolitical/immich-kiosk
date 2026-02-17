@@ -7,10 +7,11 @@ package routes
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/a-h/templ"
 	"github.com/charmbracelet/log"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 
 	"github.com/damongolding/immich-kiosk/internal/common"
 	"github.com/damongolding/immich-kiosk/internal/config"
@@ -20,9 +21,10 @@ import (
 )
 
 const (
-	maxWeatherRetries   = 3
-	maxRedirects        = 10
-	redirectCountHeader = "X-Redirect-Count"
+	maxWeatherRetries      = 3
+	maxProcessAssetRetries = 10
+	maxRedirects           = 10
+	redirectCountHeader    = "X-Redirect-Count"
 )
 
 var (
@@ -30,7 +32,9 @@ var (
 
 	drawFacesOnImages string
 
-	VideoManager *video.VideoManager
+	VideoManager *video.Manager
+
+	mu sync.Mutex
 )
 
 type PersonOrAlbum struct {
@@ -59,11 +63,11 @@ func ShouldDrawFacesOnImages() bool {
 // Returns:
 //   - *common.RouteRequestData: Processed request data and configuration
 //   - error: Any errors encountered during initialization
-func InitializeRequestData(c echo.Context, baseConfig *config.Config) (*common.RouteRequestData, error) {
+func InitializeRequestData(c *echo.Context, baseConfig *config.Config) (*common.RouteRequestData, error) {
 
 	kioskDeviceVersion := c.Request().Header.Get("kiosk-version")
 	deviceID := c.Request().Header.Get("kiosk-device-id")
-	requestID := utils.ColorizeRequestId(c.Response().Header().Get(echo.HeaderXRequestID))
+	requestID := utils.ColorizeRequestID(c.Response().Header().Get(echo.HeaderXRequestID))
 	clientName := c.QueryParams().Get("client")
 	if clientName == "" {
 		clientName = c.FormValue("client")
@@ -79,7 +83,7 @@ func InitializeRequestData(c echo.Context, baseConfig *config.Config) (*common.R
 	}
 
 	queryParams := c.QueryParams()
-	formParam, err := c.FormParams()
+	formParam, err := c.FormValues()
 	if err != nil {
 		log.Error("initialise request data", "error", err, "path", c.Request().URL.Path)
 		return nil, echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
@@ -101,24 +105,40 @@ func InitializeRequestData(c echo.Context, baseConfig *config.Config) (*common.R
 	}, nil
 }
 
-func RenderError(c echo.Context, err error, message string) error {
+func RenderError(c *echo.Context, err error, message string, refresh int) error {
 	log.Error(message, "err", err)
+
+	retry := refresh > 5
+
 	return Render(c, http.StatusOK, partials.Error(partials.ErrorData{
 		Title:   "Error " + message,
 		Message: err.Error(),
+		Retry:   retry,
+	}))
+}
+
+func RenderUnauthorized(c *echo.Context) error {
+	return Render(c, http.StatusUnauthorized, partials.Unauthorized())
+}
+
+func RenderMessage(c *echo.Context, title, message string) error {
+	return Render(c, http.StatusOK, partials.Message(partials.MessageData{
+		Title:   title,
+		Message: message,
 	}))
 }
 
 // This custom Render replaces Echo's echo.Context.Render() with templ's templ.Component.Render().
-func Render(ctx echo.Context, statusCode int, t templ.Component) error {
+func Render(ctx *echo.Context, statusCode int, t templ.Component) error {
+	// Set content type manually
+	ctx.Response().Header().Set(echo.HeaderContentType, echo.MIMETextHTMLCharsetUTF8)
+	ctx.Response().WriteHeader(statusCode)
 
-	buf := templ.GetBuffer()
-	defer templ.ReleaseBuffer(buf)
-
-	if err := t.Render(ctx.Request().Context(), buf); err != nil {
-		log.Error("rendering view", "err", err)
+	// Stream the rendered HTML directly
+	if err := t.Render(ctx.Request().Context(), ctx.Response()); err != nil {
+		log.Warn("rendering view", "err", err)
 		return err
 	}
 
-	return ctx.HTML(statusCode, buf.String())
+	return nil
 }

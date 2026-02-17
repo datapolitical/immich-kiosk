@@ -1,11 +1,15 @@
 package routes
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"os"
+	"sort"
+	"strings"
 
 	"github.com/charmbracelet/log"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 
 	"github.com/damongolding/immich-kiosk/internal/common"
 	"github.com/damongolding/immich-kiosk/internal/config"
@@ -14,9 +18,9 @@ import (
 	"github.com/damongolding/immich-kiosk/internal/weather"
 )
 
-// Home home endpoint
-func Home(baseConfig *config.Config) echo.HandlerFunc {
-	return func(c echo.Context) error {
+// Home returns an HTTP handler for the home endpoint, initializing request data, applying custom CSS if available, and rendering the home view with device identification and configuration context.
+func Home(baseConfig *config.Config, com *common.Common) echo.HandlerFunc {
+	return func(c *echo.Context) error {
 
 		c.SetCookie(&http.Cookie{
 			Name:   redirectCountHeader,
@@ -43,9 +47,9 @@ func Home(baseConfig *config.Config) echo.HandlerFunc {
 			"requestConfig", requestConfig.String(),
 		)
 
-		var customCss []byte
+		var customCSS []byte
 
-		customCss, err = loadCustomCSS()
+		customCSS, err = loadCustomCSS()
 		if err != nil {
 			log.Error("loading custom css", "err", err)
 		}
@@ -57,14 +61,48 @@ func Home(baseConfig *config.Config) echo.HandlerFunc {
 
 		viewData := common.ViewData{
 			KioskVersion: KioskVersion,
-			DeviceID:     utils.GenerateUUID(),
+			RequestID:    requestID,
+			DeviceID:     generateDeviceID(c),
 			Queries:      queryParams,
-			CustomCss:    customCss,
+			CustomCSS:    customCSS,
 			Config:       requestConfig,
 		}
 
-		return Render(c, http.StatusOK, views.Home(viewData))
+		return Render(c, http.StatusOK, views.Home(viewData, com.Secret()))
 	}
+}
+
+// generateDeviceID generates a stable device identifier based on request-specific information.
+//
+// It uses the "kiosk-device-id" header if present, otherwise falls back to a combination of
+// the client's IP address and User-Agent. The identifier also incorporates normalized query
+// parameters. The resulting string is hashed using SHA-256 and returned as a hex string.
+func generateDeviceID(c *echo.Context) string {
+	queryParams := c.QueryParams()
+	var parts []string
+	for key, values := range queryParams {
+		joined := strings.Join(values, ",")
+		parts = append(parts, key+"="+joined)
+	}
+	sort.Strings(parts)
+	normalizedQuery := strings.Join(parts, "&")
+
+	deviceTag := c.Request().Header.Get("kiosk-device-id")
+	if deviceTag == "" {
+		ip := c.RealIP()
+		if ip == "" {
+			ip = utils.GenerateUUID()
+		}
+		userAgent := c.Request().UserAgent()
+		deviceTag = ip + "|" + userAgent
+	}
+
+	idSource := deviceTag + "|" + normalizedQuery
+
+	hash := sha256.Sum256([]byte(idSource))
+	deviceID := hex.EncodeToString(hash[:])
+
+	return deviceID
 }
 
 func loadCustomCSS() ([]byte, error) {

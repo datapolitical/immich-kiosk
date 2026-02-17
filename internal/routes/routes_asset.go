@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"net/http"
+	"strconv"
 	"slices"
 	"strings"
 
@@ -134,6 +135,9 @@ func Image(baseConfig *config.Config, com *common.Common) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
+
+		c.Response().Header().Set("X-Asset-ID", immichAsset.ID)
+		c.Response().Header().Set("X-Asset-Liked", strconv.FormatBool(immichAsset.IsFavorite))
 
 		// Optimize image if wanted
 		if requestConfig.OptimizeImages && requestConfig.ClientData.Width > 0 && requestConfig.ClientData.Height > 0 {

@@ -28,6 +28,12 @@ templ Wall() {
 					object-fit: contain;
 					display: block;
 					background: #111;
+					cursor: pointer;
+				}
+
+				img.is-liked {
+					outline: 4px solid #ff375f;
+					outline-offset: -4px;
 				}
 
 				#wall-sentinel {
@@ -53,14 +59,72 @@ templ Wall() {
 						img.loading = 'lazy';
 						img.decoding = 'async';
 						img.alt = 'Random photo';
+						img.addEventListener('click', () => toggleLike(img));
 
 						img.onload = () => resolve();
 						img.onerror = () => resolve();
 
-						img.src = `/image?wall=${Date.now()}-${imageCount}`;
+						fetch(`/image?wall=${Date.now()}-${imageCount}`)
+							.then(async (response) => {
+								if (!response.ok) {
+									throw new Error('Failed to fetch image');
+								}
+
+								const assetID = response.headers.get('X-Asset-ID');
+								const isLiked = response.headers.get('X-Asset-Liked') === 'true';
+								const blob = await response.blob();
+
+								if (assetID) {
+									img.dataset.assetId = assetID;
+								}
+
+								img.dataset.liked = `${isLiked}`;
+								img.classList.toggle('is-liked', isLiked);
+								img.src = URL.createObjectURL(blob);
+							})
+							.catch(() => {
+								img.remove();
+								resolve();
+							});
+
 						container.appendChild(img);
 						imageCount += 1;
 					});
+				}
+
+				function toggleLike(img) {
+					const assetID = img.dataset.assetId;
+					if (!assetID || img.dataset.loading === 'true') {
+						return;
+					}
+
+					const isLiked = img.dataset.liked === 'true';
+					const endpoint = isLiked ? '/asset/unlike' : '/asset/like';
+					const formData = new URLSearchParams();
+					formData.set('assetID', assetID);
+
+					img.dataset.loading = 'true';
+
+					fetch(endpoint, {
+						method: 'POST',
+						headers: {
+							'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
+						},
+						body: formData.toString()
+					})
+						.then((response) => {
+							if (!response.ok) {
+								throw new Error('Unable to update like state');
+							}
+
+							const updatedLikedState = !isLiked;
+							img.dataset.liked = `${updatedLikedState}`;
+							img.classList.toggle('is-liked', updatedLikedState);
+						})
+						.catch(() => {})
+						.finally(() => {
+							img.dataset.loading = 'false';
+						});
 				}
 
 				function sentinelWithinPreloadRange() {

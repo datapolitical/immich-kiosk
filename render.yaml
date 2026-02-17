@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: immich-kiosk-demo
+    runtime: docker
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /
+    envVars:
+      - key: TZ
+        value: UTC
+      - key: KIOSK_IMMICH_URL
+        value: https://demo.immich.app
+      - key: KIOSK_IMMICH_API_KEY
+        sync: false

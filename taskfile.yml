@@ -72,4 +72,4 @@ tasks:
   update-templ:
     desc: Update templ CLI tool
     cmds:
-      - go install github.com/a-h/templ/cmd/templ@latest
+      - go install github.com/a-h/templ/cmd/templ@v0.3.833

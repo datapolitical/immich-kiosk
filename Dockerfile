@@ -10,7 +10,7 @@ WORKDIR /app
 COPY . .
 
 RUN go mod download
-RUN go install github.com/a-h/templ/cmd/templ@latest
+RUN TEMPL_VERSION="$(go list -m -f '{{.Version}}' github.com/a-h/templ)" && go install github.com/a-h/templ/cmd/templ@${TEMPL_VERSION}
 RUN templ generate
 
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -a -installsuffix cgo -ldflags "-X main.version=${VERSION}" -o dist/kiosk .

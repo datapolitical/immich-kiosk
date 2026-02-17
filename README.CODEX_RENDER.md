@@ -13,7 +13,8 @@ Use the following sequence from the repo root:
 
 ```bash
 # Install templ codegen CLI (required by backend templates)
-go install github.com/a-h/templ/cmd/templ@latest
+TEMPL_VERSION="$(go list -m -f '{{.Version}}' github.com/a-h/templ)"
+go install github.com/a-h/templ/cmd/templ@${TEMPL_VERSION}
 
 # Generate Go template files
 templ generate

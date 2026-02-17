@@ -45,6 +45,7 @@ templ Wall() {
 				let imageCount = 0;
 				let isAppending = false;
 				const BATCH_SIZE = 24;
+				const PRELOAD_DISTANCE_PX = 1500;
 
 				function appendImage() {
 					return new Promise((resolve) => {
@@ -62,6 +63,10 @@ templ Wall() {
 					});
 				}
 
+				function sentinelWithinPreloadRange() {
+					return sentinel.getBoundingClientRect().top - window.innerHeight < PRELOAD_DISTANCE_PX;
+				}
+
 				async function appendImages(count) {
 					if (isAppending) {
 						return;
@@ -69,8 +74,10 @@ templ Wall() {
 
 					isAppending = true;
 
-					for (let i = 0; i < count; i++) {
-						await appendImage();
+					while (sentinelWithinPreloadRange()) {
+						for (let i = 0; i < count; i++) {
+							await appendImage();
+						}
 					}
 
 					isAppending = false;
@@ -84,7 +91,7 @@ templ Wall() {
 					}
 				}, {
 					root: null,
-					rootMargin: '1500px 0px'
+					rootMargin: `${PRELOAD_DISTANCE_PX}px 0px`
 				});
 
 				observer.observe(sentinel);

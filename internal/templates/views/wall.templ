@@ -61,8 +61,22 @@ templ Wall() {
 						img.alt = 'Random photo';
 						img.addEventListener('click', () => toggleLike(img));
 
-						img.onload = () => resolve();
-						img.onerror = () => resolve();
+						img.onload = () => {
+							const objectURL = img.dataset.objectUrl;
+							if (objectURL) {
+								URL.revokeObjectURL(objectURL);
+								delete img.dataset.objectUrl;
+							}
+							resolve();
+						};
+						img.onerror = () => {
+							const objectURL = img.dataset.objectUrl;
+							if (objectURL) {
+								URL.revokeObjectURL(objectURL);
+								delete img.dataset.objectUrl;
+							}
+							resolve();
+						};
 
 						fetch(`/image?wall=${Date.now()}-${imageCount}`)
 							.then(async (response) => {
@@ -80,7 +94,9 @@ templ Wall() {
 
 								img.dataset.liked = `${isLiked}`;
 								img.classList.toggle('is-liked', isLiked);
-								img.src = URL.createObjectURL(blob);
+								const objectURL = URL.createObjectURL(blob);
+								img.dataset.objectUrl = objectURL;
+								img.src = objectURL;
 							})
 							.catch(() => {
 								img.remove();

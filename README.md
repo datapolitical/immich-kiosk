@@ -50,6 +50,7 @@
   - [Community example: Raspberry Pi](#example-2)
 - [Installation](#installation)
 - [Docker Compose](#docker-compose)
+- [Render](#render)
 - [Android](#android)
 - [Configuration](#configuration)
   - [Changing settings via URL](#changing-settings-via-url)
@@ -197,6 +198,22 @@ There are two main ways to install Kiosk: **Docker** or **Binary**.
    ```sh
    ./kiosk
    ```
+
+------
+
+### Render
+
+This repository includes a `render.yaml` blueprint for deploying Immich Kiosk as a Render web service using the included `Dockerfile`.
+
+For Codex + Render troubleshooting and prerequisite setup, see [`README.CODEX_RENDER.md`](./README.CODEX_RENDER.md).
+
+1. In Render, choose **New +** -> **Blueprint** and select this repository.
+2. `KIOSK_IMMICH_URL` is prefilled to `https://demo.immich.app` in the blueprint.
+3. Set `KIOSK_IMMICH_API_KEY` (required) using an API key from the Immich account you want to use.
+4. Deploy the service.
+
+> [!NOTE]
+> Render provides a dynamic `PORT` environment variable for web services. Kiosk now automatically uses `PORT` when `KIOSK_PORT` is not set, so no extra port configuration is needed.
 
 ------
 

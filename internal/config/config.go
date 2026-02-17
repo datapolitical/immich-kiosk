@@ -340,22 +340,23 @@ func bindEnvironmentVariables(v *viper.Viper) error {
 
 	bindVars := []struct {
 		configKey string
-		envVar    string
+		envVars   []string
 	}{
-		{"kiosk.port", "KIOSK_PORT"},
-		{"kiosk.watch_config", "KIOSK_WATCH_CONFIG"},
-		{"kiosk.fetched_assets_size", "KIOSK_FETCHED_ASSETS_SIZE"},
-		{"kiosk.http_timeout", "KIOSK_HTTP_TIMEOUT"},
-		{"kiosk.password", "KIOSK_PASSWORD"},
-		{"kiosk.cache", "KIOSK_CACHE"},
-		{"kiosk.prefetch", "KIOSK_PREFETCH"},
-		{"kiosk.asset_weighting", "KIOSK_ASSET_WEIGHTING"},
-		{"kiosk.debug", "KIOSK_DEBUG"},
-		{"kiosk.debug_verbose", "KIOSK_DEBUG_VERBOSE"},
+		{"kiosk.port", []string{"KIOSK_PORT", "PORT"}},
+		{"kiosk.watch_config", []string{"KIOSK_WATCH_CONFIG"}},
+		{"kiosk.fetched_assets_size", []string{"KIOSK_FETCHED_ASSETS_SIZE"}},
+		{"kiosk.http_timeout", []string{"KIOSK_HTTP_TIMEOUT"}},
+		{"kiosk.password", []string{"KIOSK_PASSWORD"}},
+		{"kiosk.cache", []string{"KIOSK_CACHE"}},
+		{"kiosk.prefetch", []string{"KIOSK_PREFETCH"}},
+		{"kiosk.asset_weighting", []string{"KIOSK_ASSET_WEIGHTING"}},
+		{"kiosk.debug", []string{"KIOSK_DEBUG"}},
+		{"kiosk.debug_verbose", []string{"KIOSK_DEBUG_VERBOSE"}},
 	}
 
 	for _, bv := range bindVars {
-		if err := v.BindEnv(bv.configKey, bv.envVar); err != nil {
+		bindArgs := append([]string{bv.configKey}, bv.envVars...)
+		if err := v.BindEnv(bindArgs...); err != nil {
 			errs = append(errs, err)
 		}
 	}

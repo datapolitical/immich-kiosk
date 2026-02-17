@@ -4,38 +4,72 @@ templ Wall() {
 	<!DOCTYPE html>
 	<html lang="en">
 		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 			<style>
 				html, body {
 					height: 100%;
 					margin: 0;
 					padding: 0;
+					background: #000;
 				}
 
 				.container {
-					display: flex;
-					flex-wrap: wrap;
-					justify-content: center;
-					gap: 0;
+					display: grid;
+					grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+					gap: 8px;
+					padding: 8px;
 				}
 
 				img {
 					width: 100%;
-					max-width: 50vw;
-					height: auto;
+					height: 100%;
+					object-fit: cover;
+					display: block;
+					aspect-ratio: 4 / 3;
+					background: #111;
+				}
+
+				#wall-sentinel {
+					height: 1px;
 				}
 			</style>
 		</head>
 		<body>
-			<div class="container">
-				for i := 0; i < 24; i++ {
-					<img
-						class="reveal-trigger"
-						loading="lazy"
-						decoding="async"
-						src="/image"
-					/>
+			<div id="wall-container" class="container"></div>
+			<div id="wall-sentinel" aria-hidden="true"></div>
+
+			<script>
+				const container = document.getElementById('wall-container');
+				const sentinel = document.getElementById('wall-sentinel');
+				let imageCount = 0;
+				const BATCH_SIZE = 24;
+
+				function appendImages(count) {
+					for (let i = 0; i < count; i++) {
+						const img = document.createElement('img');
+						img.loading = 'lazy';
+						img.decoding = 'async';
+						img.src = `/image?wall=${Date.now()}-${imageCount}`;
+						img.alt = 'Random photo';
+						container.appendChild(img);
+						imageCount += 1;
+					}
 				}
-			</div>
+
+				appendImages(BATCH_SIZE);
+
+				const observer = new IntersectionObserver((entries) => {
+					if (entries.some((entry) => entry.isIntersecting)) {
+						appendImages(BATCH_SIZE);
+					}
+				}, {
+					root: null,
+					rootMargin: '1500px 0px'
+				});
+
+				observer.observe(sentinel);
+			</script>
 		</body>
 	</html>
 }
